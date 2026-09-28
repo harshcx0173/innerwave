@@ -1,0 +1,4 @@
+-e ../../innertube-main
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
+yt-dlp==2026.8.19

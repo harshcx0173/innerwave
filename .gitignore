@@ -1,0 +1,42 @@
+# Local archives and backups
+backups/
+*.zip
+
+# Python
+music-app/.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Next.js / Node
+music-app/frontend/node_modules/
+music-app/frontend/.next/
+music-app/frontend/out/
+music-app/frontend/tsconfig.tsbuildinfo
+npm-debug.log*
+
+# Flutter / Dart
+music-app/mobile/.dart_tool/
+music-app/mobile/build/
+music-app/mobile/.flutter-plugins
+music-app/mobile/.flutter-plugins-dependencies
+music-app/mobile/android/local.properties
+music-app/mobile/ios/Flutter/Generated.xcconfig
+music-app/mobile/ios/Flutter/flutter_export_environment.sh
+**/Flutter/ephemeral/
+*.iml
+
+# Runtime state and local configuration
+music-app/.run-pids.json
+**/.env
+**/.env.local
+**/.env.*
+!**/.env.example
+!**/.env.local.example
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
