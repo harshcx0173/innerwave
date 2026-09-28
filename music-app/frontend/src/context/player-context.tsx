@@ -10,8 +10,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { API_URL, musicApi } from "@/lib/api";
+import { musicApi } from "@/lib/api";
 import type { MediaItem } from "@/lib/types";
+import { YoutubeTransport, type YoutubeTransportHandle } from "@/components/youtube-transport";
 
 type PlayerContextValue = {
   current: MediaItem | null;
@@ -59,10 +60,11 @@ function remember(item: MediaItem) {
 }
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
-  const audio = useRef<HTMLAudioElement>(null);
+  const transport = useRef<YoutubeTransportHandle>(null);
   const continuationLoading = useRef(false);
   const restored = useRef(false);
   const resumeTime = useRef(0);
+  const autoplayOnLoad = useRef(false);
   const queueRef = useRef<MediaItem[]>([]);
   const seenIdsRef = useRef<Set<string>>(new Set());
   const [current, setCurrent] = useState<MediaItem | null>(null);
@@ -131,10 +133,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const play = useCallback((item: MediaItem, context: MediaItem[] = []) => {
     if (!item.videoId) return;
-    if (audio.current) {
-      audio.current.pause();
-      audio.current.currentTime = 0;
-    }
+    transport.current?.stop();
     const playable = context.filter((entry) => entry.videoId);
     const index = playable.findIndex((entry) => entry.id === item.id);
     const nextQueue = index >= 0 ? playable : [item];
@@ -145,6 +144,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setQueue(nextQueue);
     setQueueIndex(index >= 0 ? index : 0);
     setQueueContinuation(null);
+    autoplayOnLoad.current = true;
     setCurrent(item);
     setIsPlaying(true);
     setError(null);
@@ -157,13 +157,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (nextIndex < queue.length) {
         const item = queue[nextIndex];
         seenIdsRef.current.add(item.id);
-        if (audio.current) {
-          audio.current.pause();
-          audio.current.currentTime = 0;
-        }
+        transport.current?.stop();
         resumeTime.current = 0;
         setCurrentTime(0);
         setBuffered(0);
+        autoplayOnLoad.current = true;
         setCurrent(item);
         setIsPlaying(true);
         remember(item);
@@ -175,8 +173,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [queue]);
 
   const previous = useCallback(() => {
-    if (audio.current && audio.current.currentTime > 4) {
-      audio.current.currentTime = 0;
+    if (currentTime > 4) {
+      transport.current?.seek(0);
       setCurrentTime(0);
       return;
     }
@@ -185,20 +183,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const item = queue[previousIndex];
       if (item) {
         seenIdsRef.current.add(item.id);
-        if (audio.current) {
-          audio.current.pause();
-          audio.current.currentTime = 0;
-        }
+        transport.current?.stop();
         resumeTime.current = 0;
         setCurrentTime(0);
         setBuffered(0);
+        autoplayOnLoad.current = true;
         setCurrent(item);
         setIsPlaying(true);
         remember(item);
       }
       return previousIndex;
     });
-  }, [queue]);
+  }, [currentTime, queue]);
 
   useEffect(() => {
     if (!current?.videoId) return;
@@ -237,16 +233,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [loadMoreQueue, queue.length, queueIndex]);
 
   useEffect(() => {
-    if (!audio.current) return;
-    audio.current.volume = volume;
+    transport.current?.setVolume(volume);
     if (isPlaying && current) {
-      audio.current.play().catch(() => {
-        setIsPlaying(false);
-      });
+      transport.current?.play();
     } else {
-      audio.current.pause();
+      transport.current?.pause();
     }
   }, [current, isPlaying, volume]);
+
+  useEffect(() => {
+    if (!current?.videoId) return;
+    transport.current?.load(current.videoId, resumeTime.current, autoplayOnLoad.current);
+    autoplayOnLoad.current = false;
+  }, [current?.videoId]);
 
   useEffect(() => {
     const syncFullscreen = () => {
@@ -291,7 +290,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setError(null);
       const safeTime = Math.max(0, Math.min(duration || time, time));
       resumeTime.current = safeTime;
-      if (audio.current) audio.current.currentTime = safeTime;
+      transport.current?.seek(safeTime);
       setCurrentTime(safeTime);
     },
     setVolume: (nextVolume) => setVolumeState(Math.max(0, Math.min(1, nextVolume))),
@@ -310,29 +309,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   return (
     <PlayerContext.Provider value={value}>
       {children}
-      <audio
-        ref={audio}
-        src={current?.videoId ? `${API_URL}/api/stream/${current.videoId}` : undefined}
-        onLoadedMetadata={(event) => {
-          const media = event.currentTarget;
-          const restoredTime = Math.min(resumeTime.current, Number.isFinite(media.duration) ? Math.max(0, media.duration - 0.25) : resumeTime.current);
-          if (restoredTime > 0) media.currentTime = restoredTime;
-          setDuration(Number.isFinite(media.duration) ? media.duration : 0);
+      <YoutubeTransport
+        ref={transport}
+        onTime={(time, nextDuration, nextBuffered) => {
+          setCurrentTime(time);
+          setDuration(nextDuration);
+          setBuffered(nextBuffered);
         }}
-        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-        onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-        onProgress={(event) => {
-          const media = event.currentTarget;
-          if (media.buffered.length && Number.isFinite(media.duration) && media.duration > 0) {
-            setBuffered(media.buffered.end(media.buffered.length - 1));
-          }
-        }}
+        onPlayingChange={setIsPlaying}
         onEnded={next}
-        onError={() => {
-          if (current) setError("This track could not be played. Try another result.");
+        onError={(message) => {
+          setError(message);
           setIsPlaying(false);
         }}
-        preload="auto"
       />
     </PlayerContext.Provider>
   );

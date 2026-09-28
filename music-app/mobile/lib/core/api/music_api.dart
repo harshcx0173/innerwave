@@ -13,9 +13,9 @@ class _CacheEntry<T> {
 }
 
 class MusicApi {
-  static const String ngrokUrl = 'https://29df-2402-3a80-4625-fc9e-dded-fbe5-568d-1b90.ngrok-free.app';
+  static const String productionUrl = 'https://innerwave.onrender.com';
 
-  static String get defaultBaseUrl => ngrokUrl;
+  static String get defaultBaseUrl => productionUrl;
 
   static const Map<String, String> defaultHeaders = {
     'ngrok-skip-browser-warning': 'true',

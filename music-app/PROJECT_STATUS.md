@@ -1,10 +1,10 @@
 # InnerWave Project Status and Handoff
 
-Last updated: 25 September 2026
+Last updated: 28 September 2026
 
 ## 1. Project summary
 
-InnerWave is a local-first YouTube Music-style web player. It uses the cloned `innertube-main` Python library to talk to YouTube Music's private InnerTube endpoints, a FastAPI backend to normalize those responses, and a Next.js/React frontend for the interface and audio player.
+InnerWave is a local-first YouTube Music-style web and Flutter player. It uses the cloned `innertube-main` Python library to normalize YouTube Music discovery data through FastAPI. Web playback uses the YouTube IFrame player, while Flutter resolves audio streams on the listener's device so cloud-host IP challenges do not break playback.
 
 The current application runs locally at:
 
@@ -43,7 +43,7 @@ InnerTube/
 - TypeScript
 - Tailwind/PostCSS tooling plus custom CSS in `frontend/src/app/globals.css`
 - Lucide React icons
-- Native browser `<audio>` element and Fullscreen API
+- YouTube IFrame player transport and browser Fullscreen API
 
 ### Backend
 
@@ -149,7 +149,7 @@ The frontend uses `/backend/...`. `frontend/next.config.ts` rewrites that prefix
 | `GET /api/lyrics?videoId=&title=&artist=&duration=` | QueuePanel Lyrics tab | Combines YouTube plain lyrics with the closest LRCLIB synchronized candidate and returns parsed timed lines. |
 | `GET /api/related?videoId=` | QueuePanel Related tab | Resolves the YouTube Music Related browse tab and returns normalized shelves. |
 | `GET /api/player/{videoId}` | Currently not used directly by UI | Debug/metadata endpoint exposing the selected playable source information. |
-| `GET /api/stream/{videoId}` | Native `<audio src>` | Resolves audio and redirects only to an allowed YouTube/GoogleVideo media host. |
+| `GET /api/stream/{videoId}` | Flutter fallback/debugging | Resolves audio and redirects only to an allowed YouTube/GoogleVideo media host. Cloud-provider IPs can be challenged by YouTube, so it is no longer the primary client playback path. |
 
 ## 6. Backend implementation details
 

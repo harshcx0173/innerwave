@@ -4,6 +4,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import '../api/music_api.dart';
 import '../models/media_model.dart';
 
@@ -12,12 +13,14 @@ enum PlayRepeatMode { off, all, one }
 class PlayerProvider extends ChangeNotifier {
   final MusicApi api;
   final AudioPlayer _player = AudioPlayer();
+  final YoutubeExplode _youtube = YoutubeExplode();
 
   MediaItem? _current;
   List<MediaItem> _queue = [];
   int _queueIndex = 0;
   String? _queueContinuation;
   bool _isLoadingQueue = false;
+  int _streamRequestId = 0;
   final Set<String> _seenIds = {};
 
   bool _isPlaying = false;
@@ -239,15 +242,44 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   Future<void> _loadAndPlayStream(String videoId) async {
+    final requestId = ++_streamRequestId;
+    await _player.stop();
     try {
-      final url = api.getStreamUrl(videoId);
-      await _player.stop();
-      await _player.setUrl(url);
+      // Resolve on the listener's device. Cloud-provider IPs are frequently
+      // challenged by YouTube, while the device request uses the user's own
+      // network and keeps Render responsible only for metadata and discovery.
+      final manifest = await _youtube.videos.streams.getManifest(
+        videoId,
+        ytClients: [
+          YoutubeApiClient.android,
+          YoutubeApiClient.androidSdkless,
+        ],
+      );
+      if (requestId != _streamRequestId) return;
+      final stream = manifest.audioOnly.withHighestBitrate();
+      await _player.setUrl(stream.url.toString());
+      if (requestId != _streamRequestId) return;
       await _player.play();
-    } catch (e) {
-      _error = 'Unable to play stream. Try another track.';
-      _isPlaying = false;
-      notifyListeners();
+      return;
+    } catch (deviceError) {
+      try {
+        // Preserve the hosted endpoint as a fallback for environments where
+        // YouTube permits cloud-side extraction.
+        if (requestId != _streamRequestId) return;
+        await _player.setUrl(api.getStreamUrl(videoId));
+        if (requestId != _streamRequestId) return;
+        await _player.play();
+        return;
+      } catch (hostedError) {
+        if (kDebugMode) {
+          debugPrint('Device stream resolution failed: $deviceError');
+          debugPrint('Hosted stream fallback failed: $hostedError');
+        }
+        if (requestId != _streamRequestId) return;
+        _error = 'Unable to play this track from YouTube. Try another track or network.';
+        _isPlaying = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -416,6 +448,7 @@ class PlayerProvider extends ChangeNotifier {
     _durationSubscription?.cancel();
     _bufferedSubscription?.cancel();
     _player.dispose();
+    _youtube.close();
     super.dispose();
   }
 }

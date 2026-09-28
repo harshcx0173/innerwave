@@ -18,7 +18,8 @@ InnerWave is a local-first music web app with a Next.js interface and a FastAPI 
 - YouTube Music-style mood chips and finite lazy-loaded discovery shelves
 - Album and playlist detail views with Play all, Shuffle and card-level play buttons
 - Responsive desktop, tablet and mobile layouts
-- InnerTube audio resolution with a maintained `yt-dlp` fallback when Google's old private client versions reject playback
+- Browser playback through the YouTube IFrame player, avoiding cloud-host IP extraction blocks
+- Flutter playback through device-side YouTube stream resolution with the hosted stream endpoint retained as a fallback
 
 ## Project layout
 
