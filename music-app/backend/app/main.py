@@ -62,8 +62,13 @@ def _search_recommendations(video_id: str, title: str, artist: str, *, limit: in
     ]
     items: list[dict] = []
     seen: set[str] = {video_id}
+    last_error: Exception | None = None
     for query in dict.fromkeys(queries):
-        parsed = parse_feed(service.search(query))
+        try:
+            parsed = parse_feed(service.search(query))
+        except Exception as exc:
+            last_error = exc
+            continue
         for shelf in parsed["shelves"]:
             for item in shelf["items"]:
                 item_id = str(item.get("videoId") or item.get("id") or "")
@@ -73,6 +78,8 @@ def _search_recommendations(video_id: str, title: str, artist: str, *, limit: in
                 items.append(item)
                 if len(items) >= limit:
                     return items
+    if not items and last_error:
+        raise last_error
     return items
 
 
