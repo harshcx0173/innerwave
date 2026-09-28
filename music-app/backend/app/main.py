@@ -26,6 +26,56 @@ def upstream_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=502, detail=f"InnerTube upstream error: {exc}")
 
 
+def _recommendation_seed(video_id: str, title: str, artist: str) -> tuple[str, str]:
+    if title.strip():
+        return title.strip(), artist.strip()
+    parsed = parse_feed(service.search(video_id))
+    candidates = [
+        item
+        for shelf in parsed["shelves"]
+        for item in shelf["items"]
+        if item.get("videoId")
+    ]
+    if not candidates:
+        return video_id, artist.strip()
+    seed = next((item for item in candidates if item.get("videoId") == video_id), candidates[0])
+    artists = seed.get("artists") or []
+    resolved_artist = ", ".join(str(value) for value in artists if value) if isinstance(artists, list) else ""
+    if not resolved_artist:
+        resolved_artist = str(seed.get("subtitle") or "").split(" · ")[0]
+    return str(seed.get("title") or video_id), artist.strip() or resolved_artist
+
+
+def _search_recommendations(video_id: str, title: str, artist: str, *, limit: int = 50) -> list[dict]:
+    """Build a stable song radio from Music search when watch-next is blocked.
+
+    YouTube Music's watch-next call is regularly throttled on cloud-host IPs
+    (including Render), while its search endpoint remains available.  Supplying
+    the current track metadata lets hosted clients avoid the failing call and
+    still receive a queue seeded by the song rather than by the visible shelf.
+    """
+    title, artist = _recommendation_seed(video_id, title, artist)
+    queries = [
+        " ".join(part for part in (title, artist, "songs radio") if part),
+        " ".join(part for part in (artist, "popular songs") if part),
+        f"songs like {title}",
+    ]
+    items: list[dict] = []
+    seen: set[str] = {video_id}
+    for query in dict.fromkeys(queries):
+        parsed = parse_feed(service.search(query))
+        for shelf in parsed["shelves"]:
+            for item in shelf["items"]:
+                item_id = str(item.get("videoId") or item.get("id") or "")
+                if not item.get("videoId") or not item_id or item_id in seen:
+                    continue
+                seen.add(item_id)
+                items.append(item)
+                if len(items) >= limit:
+                    return items
+    return items
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "client": "WEB_REMIX"}
@@ -95,10 +145,20 @@ def next_tracks(
     params: str | None = Query(default=None, max_length=500),
     index: int | None = Query(default=None, ge=0, le=10000),
     continuation: str | None = Query(default=None, max_length=2000),
+    title: str = Query(default="", max_length=200),
+    artist: str = Query(default="", max_length=300),
 ) -> dict:
     if not videoId and not continuation:
         raise HTTPException(status_code=422, detail="videoId or continuation is required")
     try:
+        if videoId and not continuation:
+            queue = _search_recommendations(videoId, title, artist)
+            return {
+                "items": queue,
+                "shelves": [{"id": "song-radio", "title": "Up next", "layout": "songs", "items": queue}],
+                "continuation": None,
+                "source": "search-radio",
+            }
         result = parse_feed(service.next(videoId, playlistId, params=params, index=index, continuation=continuation))
         queue = next((shelf["items"] for shelf in result["shelves"] if shelf["items"]), [])
         return {"items": queue, "shelves": result["shelves"], "continuation": result["continuation"]}
@@ -202,10 +262,17 @@ def lyrics(
 
 
 @app.get("/api/related")
-def related(videoId: str = Query(min_length=5, max_length=32)) -> dict:
+def related(
+    videoId: str = Query(min_length=5, max_length=32),
+    title: str = Query(default="", max_length=200),
+    artist: str = Query(default="", max_length=300),
+) -> dict:
     try:
-        result = parse_feed(service.browse(_watch_tab(videoId, "related")))
-        return {"shelves": result["shelves"]}
+        items = _search_recommendations(videoId, title, artist, limit=30)
+        return {
+            "shelves": [{"id": "related-songs", "title": "Related", "layout": "songs", "items": items}],
+            "source": "search-radio",
+        }
     except HTTPException:
         raise
     except Exception as exc:

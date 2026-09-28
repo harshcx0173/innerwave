@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 
 import 'core/api/music_api.dart';
 import 'core/audio/player_provider.dart';
@@ -67,16 +70,23 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     return Scaffold(
       body: Stack(
         children: [
-          IndexedStack(
-            index: _currentIndex,
-            children: _screens,
-          ),
-          const Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: MiniPlayer(),
-          ),
+          // The official YouTube player must remain mounted for playback and
+          // state updates; the app's custom player UI is painted above it.
+          if (Platform.isAndroid || Platform.isIOS)
+            Positioned(
+              left: 0,
+              top: 0,
+              width: 200,
+              height: 200,
+              child: IgnorePointer(
+                child: YoutubePlayer(
+                  controller: context.read<PlayerProvider>().youtubeController,
+                  aspectRatio: 1,
+                ),
+              ),
+            ),
+          IndexedStack(index: _currentIndex, children: _screens),
+          const Positioned(left: 0, right: 0, bottom: 0, child: MiniPlayer()),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(

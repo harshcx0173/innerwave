@@ -50,7 +50,7 @@ export function QueuePanel() {
     setTabError(null);
     const request = activeTab === "lyrics"
       ? musicApi.lyrics(current!, lyricDuration, controller.signal).then((result) => setLyrics({ text: result.lyrics, source: result.source, lines: result.lines || [], synced: result.synced, syncSource: result.syncSource }))
-      : musicApi.related(videoId, controller.signal).then(setRelated);
+      : musicApi.related(current!, controller.signal).then(setRelated);
     request.catch((reason) => {
       if (!controller.signal.aborted) setTabError(reason instanceof Error ? reason.message : "This tab could not be loaded");
     }).finally(() => {

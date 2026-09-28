@@ -1,6 +1,8 @@
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../models/media_model.dart';
 
 class _CacheEntry<T> {
@@ -30,11 +32,13 @@ class MusicApi {
   final Map<String, Future<dynamic>> _inFlightRequests = {};
 
   MusicApi({String? baseUrl, http.Client? client})
-      : baseUrl = baseUrl ?? defaultBaseUrl,
-        _client = client ?? http.Client();
+    : baseUrl = baseUrl ?? defaultBaseUrl,
+      _client = client ?? http.Client();
 
   Uri _uri(String path, [Map<String, dynamic>? queryParameters]) {
-    final cleanBase = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    final cleanBase = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
     final cleanPath = path.startsWith('/') ? path : '/$path';
     final parsed = Uri.parse('$cleanBase$cleanPath');
     if (queryParameters != null && queryParameters.isNotEmpty) {
@@ -82,13 +86,15 @@ class MusicApi {
 
         // Asynchronously persist key cache entries
         if (toJson != null) {
-          SharedPreferences.getInstance().then((prefs) {
-            final payload = json.encode({
-              'data': toJson(result),
-              'expiresAt': DateTime.now().add(ttl).millisecondsSinceEpoch,
-            });
-            prefs.setString('iw_cache_$cacheKey', payload);
-          }).catchError((_) {});
+          SharedPreferences.getInstance()
+              .then((prefs) {
+                final payload = json.encode({
+                  'data': toJson(result),
+                  'expiresAt': DateTime.now().add(ttl).millisecondsSinceEpoch,
+                });
+                prefs.setString('iw_cache_$cacheKey', payload);
+              })
+              .catchError((_) {});
         }
 
         return result;
@@ -109,7 +115,9 @@ class MusicApi {
               final diskData = fromJson(parsed['data'] as Map<String, dynamic>);
               _memoryCache[cacheKey] = _CacheEntry<T>(
                 data: diskData,
-                expiresAt: DateTime.fromMillisecondsSinceEpoch(parsed['expiresAt'] as int? ?? 0),
+                expiresAt: DateTime.fromMillisecondsSinceEpoch(
+                  parsed['expiresAt'] as int? ?? 0,
+                ),
               );
               return diskData;
             }
@@ -135,9 +143,14 @@ class MusicApi {
       fromJson: (json) => Feed.fromJson(json),
       toJson: (feed) => feed.toJson(),
       networkFetch: () async {
-        final response = await _client.get(_uri('/api/home'), headers: defaultHeaders);
+        final response = await _client.get(
+          _uri('/api/home'),
+          headers: defaultHeaders,
+        );
         if (response.statusCode == 200) {
-          final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+          final data = json.decode(
+            utf8.decode(response.bodyBytes),
+          ) as Map<String, dynamic>;
           return Feed.fromJson(data);
         }
         throw Exception('Failed to load home feed: ${response.statusCode}');
@@ -152,8 +165,11 @@ class MusicApi {
     String? chip,
     bool forceRefresh = false,
   }) async {
-    final chipKey = (chip != null && chip.isNotEmpty) ? chip.toLowerCase() : 'all';
-    final cacheKey = 'feed_more_${page}_${chipKey}_${continuation?.hashCode ?? 0}';
+    final chipKey = (chip != null && chip.isNotEmpty)
+        ? chip.toLowerCase()
+        : 'all';
+    final cacheKey =
+        'feed_more_${page}_${chipKey}_${continuation?.hashCode ?? 0}';
 
     return _fetchCached<Feed>(
       cacheKey: cacheKey,
@@ -164,12 +180,18 @@ class MusicApi {
       networkFetch: () async {
         final query = <String, dynamic>{
           'page': page,
-          if (continuation != null && continuation.isNotEmpty) 'continuation': continuation,
+          if (continuation != null && continuation.isNotEmpty)
+            'continuation': continuation,
           if (chip != null && chip.isNotEmpty) 'chip': chip,
         };
-        final response = await _client.get(_uri('/api/home/more', query), headers: defaultHeaders);
+        final response = await _client.get(
+          _uri('/api/home/more', query),
+          headers: defaultHeaders,
+        );
         if (response.statusCode == 200) {
-          final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+          final data = json.decode(
+            utf8.decode(response.bodyBytes),
+          ) as Map<String, dynamic>;
           return Feed.fromJson(data);
         }
         throw Exception('Failed to load more shelves: ${response.statusCode}');
@@ -178,7 +200,10 @@ class MusicApi {
   }
 
   /// Recommendations based on artist history (cached for 20 minutes)
-  Future<List<Shelf>> getRecommendations(List<String> artists, {bool forceRefresh = false}) async {
+  Future<List<Shelf>> getRecommendations(
+    List<String> artists, {
+    bool forceRefresh = false,
+  }) async {
     if (artists.isEmpty) return [];
     final cleanArtists = artists.take(3).join(',');
     final cacheKey = 'feed_recs_${cleanArtists.toLowerCase().hashCode}';
@@ -193,9 +218,13 @@ class MusicApi {
           headers: defaultHeaders,
         );
         if (response.statusCode == 200) {
-          final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+          final data = json.decode(
+            utf8.decode(response.bodyBytes),
+          ) as Map<String, dynamic>;
           final rawShelves = data['shelves'] as List<dynamic>? ?? [];
-          return rawShelves.map((e) => Shelf.fromJson(e as Map<String, dynamic>)).toList();
+          return rawShelves
+              .map((e) => Shelf.fromJson(e as Map<String, dynamic>))
+              .toList();
         }
         return [];
       },
@@ -214,9 +243,14 @@ class MusicApi {
       fromJson: (json) => Feed.fromJson(json),
       toJson: (feed) => feed.toJson(),
       networkFetch: () async {
-        final response = await _client.get(_uri('/api/search', {'q': query.trim()}), headers: defaultHeaders);
+        final response = await _client.get(
+          _uri('/api/search', {'q': query.trim()}),
+          headers: defaultHeaders,
+        );
         if (response.statusCode == 200) {
-          final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+          final data = json.decode(
+            utf8.decode(response.bodyBytes),
+          ) as Map<String, dynamic>;
           return Feed.fromJson(data);
         }
         throw Exception('Search request failed: ${response.statusCode}');
@@ -241,7 +275,9 @@ class MusicApi {
         if (response.statusCode == 200) {
           final data = json.decode(utf8.decode(response.bodyBytes));
           if (data is Map && data['suggestions'] is List) {
-            return (data['suggestions'] as List).map((e) => e.toString()).toList();
+            return (data['suggestions'] as List)
+                .map((e) => e.toString())
+                .toList();
           }
         }
         return [];
@@ -250,7 +286,11 @@ class MusicApi {
   }
 
   /// Browse Album / Playlist / Artist collections (cached for 30 minutes)
-  Future<Feed> browse(String browseId, [String? params, bool forceRefresh = false]) async {
+  Future<Feed> browse(
+    String browseId, [
+    String? params,
+    bool forceRefresh = false,
+  ]) async {
     final cacheKey = 'browse_${browseId}_${params?.hashCode ?? 0}';
 
     return _fetchCached<Feed>(
@@ -260,12 +300,14 @@ class MusicApi {
       fromJson: (json) => Feed.fromJson(json),
       toJson: (feed) => feed.toJson(),
       networkFetch: () async {
-        final response = await _client.get(_uri('/api/browse', {
-          'id': browseId,
-          'params': ?params,
-        }), headers: defaultHeaders);
+        final response = await _client.get(
+          _uri('/api/browse', {'id': browseId, 'params': ?params}),
+          headers: defaultHeaders,
+        );
         if (response.statusCode == 200) {
-          final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+          final data = json.decode(
+            utf8.decode(response.bodyBytes),
+          ) as Map<String, dynamic>;
           return Feed.fromJson(data);
         }
         throw Exception('Browse request failed: ${response.statusCode}');
@@ -276,11 +318,14 @@ class MusicApi {
   /// Up Next / Radio Queue (cached for 10 minutes)
   Future<Map<String, dynamic>> getRadioQueue({
     required String videoId,
+    String? title,
+    String? artist,
     String? playlistId,
     String? continuation,
     bool forceRefresh = false,
   }) async {
-    final cacheKey = 'queue_${videoId}_${playlistId ?? ''}_${continuation?.hashCode ?? 0}';
+    final cacheKey =
+        'queue_${videoId}_${playlistId ?? ''}_${continuation?.hashCode ?? 0}';
 
     return _fetchCached<Map<String, dynamic>>(
       cacheKey: cacheKey,
@@ -289,14 +334,23 @@ class MusicApi {
       networkFetch: () async {
         final query = <String, dynamic>{
           'videoId': videoId,
+          'title': ?title,
+          'artist': ?artist,
           'playlistId': ?playlistId,
           'continuation': ?continuation,
         };
-        final response = await _client.get(_uri('/api/next', query), headers: defaultHeaders);
+        final response = await _client.get(
+          _uri('/api/next', query),
+          headers: defaultHeaders,
+        );
         if (response.statusCode == 200) {
-          final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+          final data = json.decode(
+            utf8.decode(response.bodyBytes),
+          ) as Map<String, dynamic>;
           final rawItems = data['items'] as List<dynamic>? ?? [];
-          final items = rawItems.map((e) => MediaItem.fromJson(e as Map<String, dynamic>)).toList();
+          final items = rawItems
+              .map((e) => MediaItem.fromJson(e as Map<String, dynamic>))
+              .toList();
           return {
             'items': items,
             'continuation': data['continuation'] as String?,
@@ -322,14 +376,19 @@ class MusicApi {
       ttl: const Duration(hours: 24),
       forceRefresh: forceRefresh,
       networkFetch: () async {
-        final response = await _client.get(_uri('/api/lyrics', {
-          'videoId': videoId,
-          'title': title,
-          'artist': ?artist,
-          'duration': ?duration,
-        }), headers: defaultHeaders);
+        final response = await _client.get(
+          _uri('/api/lyrics', {
+            'videoId': videoId,
+            'title': title,
+            'artist': ?artist,
+            'duration': ?duration,
+          }),
+          headers: defaultHeaders,
+        );
         if (response.statusCode == 200) {
-          final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+          final data = json.decode(
+            utf8.decode(response.bodyBytes),
+          ) as Map<String, dynamic>;
           return LyricsResponse.fromJson(data);
         }
         throw Exception('Lyrics request failed: ${response.statusCode}');
@@ -338,7 +397,12 @@ class MusicApi {
   }
 
   /// Related tracks and content (cached for 30 minutes)
-  Future<Feed> getRelated(String videoId, {bool forceRefresh = false}) async {
+  Future<Feed> getRelated(
+    String videoId, {
+    String? title,
+    String? artist,
+    bool forceRefresh = false,
+  }) async {
     final cacheKey = 'related_$videoId';
 
     return _fetchCached<Feed>(
@@ -348,9 +412,18 @@ class MusicApi {
       fromJson: (json) => Feed.fromJson(json),
       toJson: (feed) => feed.toJson(),
       networkFetch: () async {
-        final response = await _client.get(_uri('/api/related', {'videoId': videoId}), headers: defaultHeaders);
+        final response = await _client.get(
+          _uri('/api/related', {
+            'videoId': videoId,
+            'title': ?title,
+            'artist': ?artist,
+          }),
+          headers: defaultHeaders,
+        );
         if (response.statusCode == 200) {
-          final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+          final data = json.decode(
+            utf8.decode(response.bodyBytes),
+          ) as Map<String, dynamic>;
           return Feed.fromJson(data);
         }
         throw Exception('Related request failed: ${response.statusCode}');
@@ -360,7 +433,9 @@ class MusicApi {
 
   /// Stream Audio URL helper
   String getStreamUrl(String videoId) {
-    final cleanBase = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    final cleanBase = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
     return '$cleanBase/api/stream/$videoId';
   }
 

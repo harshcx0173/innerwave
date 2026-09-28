@@ -22,7 +22,7 @@ export const musicApi = {
     ),
   next: (item: MediaItem, continuation?: string | null) =>
     getJson<{ items: MediaItem[]; continuation?: string | null }>(
-      `/api/next?${continuation ? `continuation=${encodeURIComponent(continuation)}` : `videoId=${encodeURIComponent(item.videoId || "")}`}${item.playlistId ? `&playlistId=${encodeURIComponent(item.playlistId)}` : ""}${item.watchParams ? `&params=${encodeURIComponent(item.watchParams)}` : ""}${item.index != null ? `&index=${item.index}` : ""}`,
+      `/api/next?${continuation ? `continuation=${encodeURIComponent(continuation)}` : `videoId=${encodeURIComponent(item.videoId || "")}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artists.join(", ") || item.subtitle.split(" · ")[0] || "")}`}${item.playlistId ? `&playlistId=${encodeURIComponent(item.playlistId)}` : ""}${item.watchParams ? `&params=${encodeURIComponent(item.watchParams)}` : ""}${item.index != null ? `&index=${item.index}` : ""}`,
     ),
   lyrics: (item: MediaItem, duration?: number, signal?: AbortSignal) => {
     const artist = item.artists.join(", ") || item.subtitle.split(" · ")[0] || "";
@@ -30,8 +30,11 @@ export const musicApi = {
     if (duration && Number.isFinite(duration)) query.set("duration", String(duration));
     return getJson<{ lyrics: string; source?: string | null; lines: { time: number; text: string }[]; synced: boolean; syncSource?: string | null }>(`/api/lyrics?${query}`, signal);
   },
-  related: (videoId: string, signal?: AbortSignal) =>
-    getJson<Feed>(`/api/related?videoId=${encodeURIComponent(videoId)}`, signal),
+  related: (item: MediaItem, signal?: AbortSignal) => {
+    const artist = item.artists.join(", ") || item.subtitle.split(" · ")[0] || "";
+    const query = new URLSearchParams({ videoId: item.videoId || "", title: item.title, artist });
+    return getJson<Feed>(`/api/related?${query}`, signal);
+  },
   moreHome: (page: number, continuation?: string | null, seed?: string) =>
     getJson<Feed>(
       `/api/home/more?page=${page}${continuation ? `&continuation=${encodeURIComponent(continuation)}` : ""}${seed ? `&seed=${encodeURIComponent(seed)}` : ""}`,

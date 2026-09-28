@@ -1,10 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import 'package:youtube_player_iframe/youtube_player_iframe.dart';
+
 import '../api/music_api.dart';
 import '../models/media_model.dart';
 
@@ -12,8 +13,8 @@ enum PlayRepeatMode { off, all, one }
 
 class PlayerProvider extends ChangeNotifier {
   final MusicApi api;
-  final AudioPlayer _player = AudioPlayer();
-  final YoutubeExplode _youtube = YoutubeExplode();
+  YoutubePlayerController? _youtubeController;
+  bool _transportInitialized = false;
 
   MediaItem? _current;
   List<MediaItem> _queue = [];
@@ -21,6 +22,7 @@ class PlayerProvider extends ChangeNotifier {
   String? _queueContinuation;
   bool _isLoadingQueue = false;
   int _streamRequestId = 0;
+  String? _loadedVideoId;
   final Set<String> _seenIds = {};
 
   bool _isPlaying = false;
@@ -43,10 +45,10 @@ class PlayerProvider extends ChangeNotifier {
   StreamSubscription? _positionSubscription;
   StreamSubscription? _durationSubscription;
   StreamSubscription? _bufferedSubscription;
+  PlayerState _lastPlayerState = PlayerState.unknown;
 
   PlayerProvider({required this.api}) {
     _initAudioSession();
-    _initAudioStreams();
     _restoreSession();
   }
 
@@ -70,11 +72,31 @@ class PlayerProvider extends ChangeNotifier {
   List<MediaItem> get history => _history;
   Set<String> get likedIds => _likedIds;
   List<MediaItem> get likedSongs => _likedSongs;
+  YoutubePlayerController get youtubeController {
+    _youtubeController ??= YoutubePlayerController(
+      params: const YoutubePlayerParams(
+        showControls: false,
+        showFullscreenButton: false,
+        enableCaption: false,
+        pointerEvents: PointerEvents.none,
+        playsInline: true,
+        privacyEnhancedMode: false,
+        videoStateUpdateInterval: 250,
+      ),
+    );
+    if (!_transportInitialized) {
+      _transportInitialized = true;
+      _initAudioStreams(_youtubeController!);
+    }
+    return _youtubeController!;
+  }
 
   bool isLiked(String id) => _likedIds.contains(id);
 
-  bool get hasSleepTimer => _sleepTimerEndsAt != null && _sleepTimerEndsAt!.isAfter(DateTime.now());
-  Duration? get sleepTimerRemaining => _sleepTimerEndsAt?.difference(DateTime.now());
+  bool get hasSleepTimer =>
+      _sleepTimerEndsAt != null && _sleepTimerEndsAt!.isAfter(DateTime.now());
+  Duration? get sleepTimerRemaining =>
+      _sleepTimerEndsAt?.difference(DateTime.now());
 
   void toggleLike(MediaItem item) async {
     if (_likedIds.contains(item.id)) {
@@ -89,9 +111,15 @@ class PlayerProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setStringList('innerwave_mobile_liked_ids', _likedIds.toList());
+      await prefs.setStringList(
+        'innerwave_mobile_liked_ids',
+        _likedIds.toList(),
+      );
       final jsonList = _likedSongs.map((e) => e.toJson()).toList();
-      await prefs.setString('innerwave_mobile_liked_songs', json.encode(jsonList));
+      await prefs.setString(
+        'innerwave_mobile_liked_songs',
+        json.encode(jsonList),
+      );
     } catch (_) {}
   }
 
@@ -99,7 +127,7 @@ class PlayerProvider extends ChangeNotifier {
     _sleepTimer?.cancel();
     _sleepTimerEndsAt = DateTime.now().add(duration);
     _sleepTimer = Timer(duration, () {
-      _player.pause();
+      youtubeController.pauseVideo();
       _sleepTimerEndsAt = null;
       notifyListeners();
     });
@@ -115,34 +143,34 @@ class PlayerProvider extends ChangeNotifier {
   List<MediaItem> get mostReplayed {
     if (_history.isEmpty) return [];
     final items = List<MediaItem>.from(_history);
-    items.sort((a, b) => (_playCounts[b.id] ?? 1).compareTo(_playCounts[a.id] ?? 1));
+    items.sort(
+      (a, b) => (_playCounts[b.id] ?? 1).compareTo(_playCounts[a.id] ?? 1),
+    );
     return items.take(12).toList();
   }
 
-  void _initAudioStreams() {
-    _playerStateSubscription = _player.playerStateStream.listen((state) {
-      final playing = state.playing;
-      final processingState = state.processingState;
-
-      _isPlaying = playing && processingState != ProcessingState.completed;
-      if (processingState == ProcessingState.completed) {
+  void _initAudioStreams(YoutubePlayerController controller) {
+    _playerStateSubscription = controller.stream.listen((value) {
+      final state = value.playerState;
+      _isPlaying = state == PlayerState.playing;
+      if (state == PlayerState.ended && _lastPlayerState != PlayerState.ended) {
         _onTrackEnded();
       }
+      _lastPlayerState = state;
       notifyListeners();
     });
 
-    _positionSubscription = _player.positionStream.listen((pos) {
-      _position = pos;
-      notifyListeners();
-    });
-
-    _durationSubscription = _player.durationStream.listen((dur) {
-      _duration = dur ?? Duration.zero;
-      notifyListeners();
-    });
-
-    _bufferedSubscription = _player.bufferedPositionStream.listen((buf) {
-      _bufferedPosition = buf;
+    _positionSubscription = controller.videoStateStream.listen((state) async {
+      _position = state.position;
+      if (_duration == Duration.zero) {
+        final seconds = await controller.duration;
+        if (seconds > 0) {
+          _duration = Duration(milliseconds: (seconds * 1000).round());
+        }
+      }
+      _bufferedPosition = Duration(
+        milliseconds: (_duration.inMilliseconds * state.loadedFraction).round(),
+      );
       notifyListeners();
     });
   }
@@ -156,7 +184,9 @@ class PlayerProvider extends ChangeNotifier {
         if (data['current'] != null) {
           _current = MediaItem.fromJson(data['current']);
           if (data['queue'] is List) {
-            _queue = (data['queue'] as List).map((e) => MediaItem.fromJson(e)).toList();
+            _queue = (data['queue'] as List)
+                .map((e) => MediaItem.fromJson(e))
+                .toList();
           }
           _queueIndex = data['queueIndex'] as int? ?? 0;
           _queueContinuation = data['continuation'] as String?;
@@ -167,7 +197,9 @@ class PlayerProvider extends ChangeNotifier {
       final historyJson = prefs.getString('innerwave_mobile_history');
       if (historyJson != null) {
         final raw = json.decode(historyJson) as List<dynamic>;
-        _history = raw.map((e) => MediaItem.fromJson(e as Map<String, dynamic>)).toList();
+        _history = raw
+            .map((e) => MediaItem.fromJson(e as Map<String, dynamic>))
+            .toList();
       }
 
       final countsJson = prefs.getString('innerwave_mobile_play_counts');
@@ -184,7 +216,9 @@ class PlayerProvider extends ChangeNotifier {
       final likedSongsJson = prefs.getString('innerwave_mobile_liked_songs');
       if (likedSongsJson != null) {
         final raw = json.decode(likedSongsJson) as List<dynamic>;
-        _likedSongs = raw.map((e) => MediaItem.fromJson(e as Map<String, dynamic>)).toList();
+        _likedSongs = raw
+            .map((e) => MediaItem.fromJson(e as Map<String, dynamic>))
+            .toList();
       }
 
       notifyListeners();
@@ -207,11 +241,17 @@ class PlayerProvider extends ChangeNotifier {
       _history.removeWhere((item) => item.id == _current!.id);
       _history.insert(0, _current!);
       if (_history.length > 50) _history = _history.sublist(0, 50);
-      await prefs.setString('innerwave_mobile_history', json.encode(_history.map((e) => e.toJson()).toList()));
+      await prefs.setString(
+        'innerwave_mobile_history',
+        json.encode(_history.map((e) => e.toJson()).toList()),
+      );
 
       // Increment and save play count
       _playCounts[_current!.id] = (_playCounts[_current!.id] ?? 0) + 1;
-      await prefs.setString('innerwave_mobile_play_counts', json.encode(_playCounts));
+      await prefs.setString(
+        'innerwave_mobile_play_counts',
+        json.encode(_playCounts),
+      );
     } catch (_) {}
   }
 
@@ -243,53 +283,38 @@ class PlayerProvider extends ChangeNotifier {
 
   Future<void> _loadAndPlayStream(String videoId) async {
     final requestId = ++_streamRequestId;
-    await _player.stop();
+    _position = Duration.zero;
+    _duration = Duration.zero;
+    _bufferedPosition = Duration.zero;
+    _isPlaying = false;
     try {
-      // Resolve on the listener's device. Cloud-provider IPs are frequently
-      // challenged by YouTube, while the device request uses the user's own
-      // network and keeps Render responsible only for metadata and discovery.
-      final manifest = await _youtube.videos.streams.getManifest(
-        videoId,
-        ytClients: [
-          YoutubeApiClient.android,
-          YoutubeApiClient.androidSdkless,
-        ],
-      );
+      // Use YouTube's supported iframe transport on the listener's device.
+      // Direct googlevideo URLs are session-bound and return 403 in ExoPlayer.
+      await youtubeController.loadVideoById(videoId: videoId);
       if (requestId != _streamRequestId) return;
-      final stream = manifest.audioOnly.withHighestBitrate();
-      await _player.setUrl(stream.url.toString());
+      _loadedVideoId = videoId;
+      _error = null;
+    } catch (_) {
       if (requestId != _streamRequestId) return;
-      await _player.play();
-      return;
-    } catch (deviceError) {
-      try {
-        // Preserve the hosted endpoint as a fallback for environments where
-        // YouTube permits cloud-side extraction.
-        if (requestId != _streamRequestId) return;
-        await _player.setUrl(api.getStreamUrl(videoId));
-        if (requestId != _streamRequestId) return;
-        await _player.play();
-        return;
-      } catch (hostedError) {
-        if (kDebugMode) {
-          debugPrint('Device stream resolution failed: $deviceError');
-          debugPrint('Hosted stream fallback failed: $hostedError');
-        }
-        if (requestId != _streamRequestId) return;
-        _error = 'Unable to play this track from YouTube. Try another track or network.';
-        _isPlaying = false;
-        notifyListeners();
-      }
+      _error = 'Unable to play this track from YouTube. Try another track or network.';
+      _isPlaying = false;
+      notifyListeners();
     }
   }
 
   Future<void> _fetchRadioQueue(String videoId) async {
     try {
-      final result = await api.getRadioQueue(videoId: videoId);
+      final result = await api.getRadioQueue(
+        videoId: videoId,
+        title: _current?.title,
+        artist: _current?.artists.join(', '),
+      );
       final items = result['items'] as List<MediaItem>;
       final continuation = result['continuation'] as String?;
 
-      final fresh = items.where((e) => e.id != _current?.id && !_seenIds.contains(e.id)).toList();
+      final fresh = items
+          .where((e) => e.id != _current?.id && !_seenIds.contains(e.id))
+          .toList();
       for (final it in fresh) {
         _seenIds.add(it.id);
       }
@@ -305,7 +330,10 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   Future<void> loadMoreQueue() async {
-    if (_isLoadingQueue || _queueContinuation == null || _current?.videoId == null) return;
+    if (_isLoadingQueue ||
+        _queueContinuation == null ||
+        _current?.videoId == null)
+      return;
     _isLoadingQueue = true;
 
     try {
@@ -317,7 +345,9 @@ class PlayerProvider extends ChangeNotifier {
       final continuation = result['continuation'] as String?;
 
       final existingIds = _queue.map((e) => e.id).toSet();
-      final fresh = items.where((e) => !existingIds.contains(e.id) && !_seenIds.contains(e.id)).toList();
+      final fresh = items
+          .where((e) => !existingIds.contains(e.id) && !_seenIds.contains(e.id))
+          .toList();
       for (final it in fresh) {
         _seenIds.add(it.id);
       }
@@ -337,10 +367,15 @@ class PlayerProvider extends ChangeNotifier {
 
   void togglePlayPause() {
     if (_current == null) return;
+    final videoId = _current!.videoId;
+    if (videoId != null && _loadedVideoId != videoId) {
+      _loadAndPlayStream(videoId);
+      return;
+    }
     if (_isPlaying) {
-      _player.pause();
+      youtubeController.pauseVideo();
     } else {
-      _player.play();
+      youtubeController.playVideo();
     }
   }
 
@@ -360,7 +395,7 @@ class PlayerProvider extends ChangeNotifier {
         loadMoreQueue();
       }
     } else {
-      _player.stop();
+      youtubeController.stopVideo();
       _isPlaying = false;
       notifyListeners();
     }
@@ -368,7 +403,7 @@ class PlayerProvider extends ChangeNotifier {
 
   void previous() {
     if (_position.inSeconds > 4) {
-      _player.seek(Duration.zero);
+      youtubeController.seekTo(seconds: 0, allowSeekAhead: true);
       return;
     }
 
@@ -383,18 +418,21 @@ class PlayerProvider extends ChangeNotifier {
       }
       _persistSession();
     } else {
-      _player.seek(Duration.zero);
+      youtubeController.seekTo(seconds: 0, allowSeekAhead: true);
     }
   }
 
   void seek(Duration position) {
-    _player.seek(position);
+    youtubeController.seekTo(
+      seconds: position.inMilliseconds / 1000,
+      allowSeekAhead: true,
+    );
   }
 
   void _onTrackEnded() {
     if (_repeatMode == PlayRepeatMode.one) {
-      _player.seek(Duration.zero);
-      _player.play();
+      youtubeController.seekTo(seconds: 0, allowSeekAhead: true);
+      youtubeController.playVideo();
     } else {
       next();
     }
@@ -415,20 +453,27 @@ class PlayerProvider extends ChangeNotifier {
     _shuffle = !_shuffle;
     if (_shuffle && _queue.isNotEmpty) {
       final currentItem = _current;
-      final rest = _queue.where((e) => e.id != currentItem?.id).toList()..shuffle();
+      final rest = _queue.where((e) => e.id != currentItem?.id).toList()
+        ..shuffle();
       _queue = currentItem != null ? [currentItem, ...rest] : rest;
       _queueIndex = 0;
     } else {
       _queue = List.from(_originalQueue);
       if (_current != null) {
-        _queueIndex = _queue.indexWhere((e) => e.id == _current!.id).clamp(0, _queue.length - 1);
+        _queueIndex = _queue
+            .indexWhere((e) => e.id == _current!.id)
+            .clamp(0, _queue.length - 1);
       }
     }
     notifyListeners();
   }
 
   void reorderQueue(int oldIndex, int newIndex) {
-    if (oldIndex < 0 || oldIndex >= _queue.length || newIndex < 0 || newIndex >= _queue.length) return;
+    if (oldIndex < 0 ||
+        oldIndex >= _queue.length ||
+        newIndex < 0 ||
+        newIndex >= _queue.length)
+      return;
     if (oldIndex == _queueIndex) return;
 
     final item = _queue.removeAt(oldIndex);
@@ -447,8 +492,7 @@ class PlayerProvider extends ChangeNotifier {
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
     _bufferedSubscription?.cancel();
-    _player.dispose();
-    _youtube.close();
+    _youtubeController?.close();
     super.dispose();
   }
 }
