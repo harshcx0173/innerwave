@@ -100,7 +100,7 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
 
           _dominantColor = _tintColor(dominant, 0.22);
           _secondaryColor = _tintColor(secondary, 0.12);
-          _accentColor = _boostColor(accent);
+          _accentColor = AppTheme.accent;
         });
       }
     } catch (_) {}
@@ -119,6 +119,17 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
   }
 
   Future<void> _loadLyrics(MediaItem item, PlayerProvider player) async {
+    if (player.currentLyrics != null && item.id == player.current?.id) {
+      if (mounted) {
+        setState(() {
+          _lyrics = player.currentLyrics;
+          _loadedLyricsTrackId = item.id;
+          _lyricKeys = List.generate(_lyrics!.lines.length, (_) => GlobalKey());
+          _loadingLyrics = false;
+        });
+      }
+      return;
+    }
     if (_loadingLyrics || (item.id == _loadedLyricsTrackId && _lyrics != null)) return;
     setState(() => _loadingLyrics = true);
     _loadedLyricsTrackId = item.id;
@@ -383,11 +394,11 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
                         controller: _tabController,
                         dividerColor: Colors.transparent,
                         indicator: BoxDecoration(
-                          color: _accentColor,
+                          color: AppTheme.accent,
                           borderRadius: BorderRadius.circular(20),
                           boxShadow: [
                             BoxShadow(
-                              color: _accentColor.withValues(alpha: 0.35),
+                              color: AppTheme.accent.withValues(alpha: 0.35),
                               blurRadius: 10,
                             ),
                           ],
@@ -567,11 +578,11 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
                     width: 64,
                     height: 64,
                     decoration: BoxDecoration(
-                      color: _accentColor,
+                      color: AppTheme.accent,
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
-                          color: _accentColor.withValues(alpha: 0.45),
+                          color: AppTheme.accent.withValues(alpha: 0.45),
                           blurRadius: 22,
                           spreadRadius: 2,
                         ),
@@ -609,11 +620,48 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
     );
   }
 
+  void _confirmClearUpcomingQueue(BuildContext context, PlayerProvider player) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E2638),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Clear upcoming queue?',
+          style: TextStyle(color: Colors.white, fontSize: 16),
+        ),
+        content: const Text(
+          'This will remove all upcoming tracks and keep only the currently playing song.',
+          style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              player.clearUpcomingQueue();
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accent),
+            child: const Text(
+              'Clear',
+              style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Up Next Queue Tab
   Widget _buildQueueTab(BuildContext context, PlayerProvider player) {
     final queue = player.queue;
     if (queue.isEmpty) {
-      return const Center(child: Text('No tracks in queue', style: TextStyle(color: AppTheme.textMuted)));
+      return const Center(
+        child: Text('No tracks in queue', style: TextStyle(color: AppTheme.textMuted)),
+      );
     }
 
     return Column(
@@ -625,59 +673,174 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
             children: [
               Text(
                 'PLAYING NEXT (${queue.length})',
-                style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8),
+                style: const TextStyle(
+                  color: AppTheme.textMuted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.8,
+                ),
               ),
-              const Icon(Icons.drag_indicator, color: Colors.white30, size: 18),
+              if (queue.length > 1)
+                GestureDetector(
+                  onTap: () => _confirmClearUpcomingQueue(context, player),
+                  child: const Text(
+                    'CLEAR UPCOMING',
+                    style: TextStyle(
+                      color: AppTheme.textMuted,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.6,
+                    ),
+                  ),
+                )
+              else
+                const Icon(Icons.drag_indicator, color: Colors.white30, size: 18),
             ],
           ),
         ),
         Expanded(
-          child: ReorderableListView.builder(
-            physics: const BouncingScrollPhysics(),
-            itemCount: queue.length,
-            onReorder: (oldIndex, newIndex) {
-              if (newIndex > oldIndex) newIndex--;
-              player.reorderQueue(oldIndex, newIndex);
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (scrollInfo) {
+              if (scrollInfo.metrics.pixels >=
+                  scrollInfo.metrics.maxScrollExtent - 240) {
+                if (!player.isLoadingQueue && player.hasMoreQueue) {
+                  player.loadMoreQueue();
+                }
+              }
+              return false;
             },
-            itemBuilder: (context, index) {
-              final item = queue[index];
-              final isCurrent = index == player.queueIndex;
-
-              return Padding(
-                key: ValueKey('${item.id}-$index'),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
-                child: Material(
-                  color: isCurrent ? const Color(0x1FFFFFFF) : Colors.transparent,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    side: isCurrent ? const BorderSide(color: AppTheme.accent) : BorderSide.none,
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-                    leading: MediaArt(item: item, width: 42, height: 42, borderRadius: 8),
-                    title: Text(
-                      item.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: isCurrent ? AppTheme.accent : Colors.white,
-                        fontSize: 13,
-                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.w500,
+            child: ReorderableListView.builder(
+              physics: const BouncingScrollPhysics(),
+              itemCount: queue.length,
+              onReorder: (oldIndex, newIndex) {
+                if (newIndex > oldIndex) newIndex--;
+                player.reorderQueue(oldIndex, newIndex);
+              },
+              footer: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (player.isLoadingQueue)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 20),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: _accentColor,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          const Text(
+                            'Loading more tracks...',
+                            style: TextStyle(
+                              color: AppTheme.textMuted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (player.hasMoreQueue)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      child: Center(
+                        child: TextButton.icon(
+                          onPressed: () => player.loadMoreQueue(),
+                          icon: Icon(
+                            Icons.arrow_downward_rounded,
+                            size: 14,
+                            color: _accentColor,
+                          ),
+                          label: Text(
+                            'Load more songs',
+                            style: TextStyle(
+                              color: _accentColor,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                    subtitle: Text(
-                      item.subtitle.isNotEmpty ? item.subtitle : item.artists.join(', '),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                  const SizedBox(height: 20),
+                ],
+              ),
+              itemBuilder: (context, index) {
+                final item = queue[index];
+                final isCurrent = index == player.queueIndex;
+
+                return Padding(
+                  key: ValueKey('${item.id}-$index'),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+                  child: Material(
+                    color: isCurrent ? const Color(0x1FFFFFFF) : Colors.transparent,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: isCurrent ? const BorderSide(color: AppTheme.accent) : BorderSide.none,
                     ),
-                    trailing: const Icon(Icons.drag_handle, color: Colors.white38, size: 18),
-                    onTap: () => player.play(item, player.queue),
+                    clipBehavior: Clip.antiAlias,
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                      leading: MediaArt(item: item, width: 42, height: 42, borderRadius: 8),
+                      title: Text(
+                        item.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: isCurrent ? AppTheme.accent : Colors.white,
+                          fontSize: 13,
+                          fontWeight: isCurrent ? FontWeight.bold : FontWeight.w500,
+                        ),
+                      ),
+                      subtitle: Text(
+                        item.subtitle.isNotEmpty ? item.subtitle : item.artists.join(', '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (!isCurrent)
+                            IconButton(
+                              icon: const Icon(
+                                Icons.close_rounded,
+                                color: Colors.white38,
+                                size: 18,
+                              ),
+                              tooltip: 'Remove from queue',
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                minWidth: 32,
+                                minHeight: 32,
+                              ),
+                              onPressed: () => player.removeFromQueue(index),
+                            )
+                          else
+                            Padding(
+                              padding: const EdgeInsets.only(right: 6),
+                              child: Icon(
+                                Icons.volume_up_rounded,
+                                color: _accentColor,
+                                size: 18,
+                              ),
+                            ),
+                          const Icon(
+                            Icons.drag_handle_rounded,
+                            color: Colors.white38,
+                            size: 20,
+                          ),
+                        ],
+                      ),
+                      onTap: () => player.play(item, player.queue),
+                    ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
       ],

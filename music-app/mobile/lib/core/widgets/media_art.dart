@@ -27,6 +27,9 @@ class MediaArt extends StatelessWidget {
     final effectiveRadius = isArtist ? 999.0 : borderRadius;
     final thumbUrl = item.highResThumbnail;
 
+    final memWidth = width != null ? (width! * 2).toInt().clamp(80, 720) : 320;
+    final memHeight = height != null ? (height! * 2).toInt().clamp(80, 720) : memWidth;
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(effectiveRadius),
       child: Container(
@@ -40,7 +43,9 @@ class MediaArt extends StatelessWidget {
               CachedNetworkImage(
                 imageUrl: thumbUrl,
                 fit: BoxFit.cover,
-                fadeInDuration: const Duration(milliseconds: 200),
+                memCacheWidth: memWidth,
+                memCacheHeight: memHeight,
+                fadeInDuration: const Duration(milliseconds: 150),
                 placeholder: (context, url) => Container(
                   color: AppTheme.surfaceElevated,
                   child: Center(
@@ -57,6 +62,8 @@ class MediaArt extends StatelessWidget {
                     return CachedNetworkImage(
                       imageUrl: 'https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg',
                       fit: BoxFit.cover,
+                      memCacheWidth: memWidth,
+                      memCacheHeight: memHeight,
                       errorWidget: (c, u, e) => _placeholder(isArtist),
                     );
                   }

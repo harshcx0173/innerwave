@@ -1,8 +1,10 @@
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'core/api/music_api.dart';
+import 'core/audio/innerwave_audio_handler.dart';
 import 'core/audio/player_provider.dart';
 import 'core/theme/app_theme.dart';
 import 'core/widgets/mini_player.dart';
@@ -10,8 +12,20 @@ import 'features/home/home_screen.dart';
 import 'features/explore/explore_screen.dart';
 import 'features/library/library_screen.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  final audioHandler = await AudioService.init(
+    builder: () => InnerWaveAudioHandler(),
+    config: const AudioServiceConfig(
+      androidNotificationChannelId: 'com.innerwave.mobile.audio',
+      androidNotificationChannelName: 'InnerWave Music Playback',
+      androidNotificationIcon: 'mipmap/ic_launcher',
+      androidShowNotificationBadge: true,
+      androidStopForegroundOnPause: true,
+    ),
+  );
+
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -21,11 +35,13 @@ void main() {
     ),
   );
 
-  runApp(const InnerWaveApp());
+  runApp(InnerWaveApp(audioHandler: audioHandler));
 }
 
 class InnerWaveApp extends StatelessWidget {
-  const InnerWaveApp({super.key});
+  final InnerWaveAudioHandler audioHandler;
+
+  const InnerWaveApp({super.key, required this.audioHandler});
 
   @override
   Widget build(BuildContext context) {
@@ -33,7 +49,10 @@ class InnerWaveApp extends StatelessWidget {
       providers: [
         Provider<MusicApi>(create: (_) => MusicApi()),
         ChangeNotifierProvider<PlayerProvider>(
-          create: (context) => PlayerProvider(api: context.read<MusicApi>()),
+          create: (context) => PlayerProvider(
+            api: context.read<MusicApi>(),
+            audioHandler: audioHandler,
+          ),
         ),
       ],
       child: MaterialApp(

@@ -179,6 +179,11 @@ class TimedLyric {
       text: json['text'] as String? ?? '',
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'time': time,
+    'text': text,
+  };
 }
 
 class LyricsResponse {
@@ -208,4 +213,12 @@ class LyricsResponse {
           [],
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'lyrics': lyrics,
+    'source': source,
+    'synced': synced,
+    'syncSource': syncSource,
+    'lines': lines.map((e) => e.toJson()).toList(),
+  };
 }

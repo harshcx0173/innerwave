@@ -2,6 +2,10 @@
 *.codex-temp*
 *.log
 *.zip
+.apk
+*. APK
+*.apk
+
 
 # Miscellaneous
 *.class

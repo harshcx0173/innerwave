@@ -331,8 +331,23 @@ class MusicApi {
 
     return _fetchCached<Map<String, dynamic>>(
       cacheKey: cacheKey,
-      ttl: const Duration(minutes: 10),
+      ttl: const Duration(minutes: 30),
       forceRefresh: forceRefresh,
+      fromJson: (json) {
+        final rawItems = json['items'] as List<dynamic>? ?? [];
+        return {
+          'items': rawItems
+              .map((e) => MediaItem.fromJson(e as Map<String, dynamic>))
+              .toList(),
+          'continuation': json['continuation'] as String?,
+        };
+      },
+      toJson: (data) => {
+        'items': (data['items'] as List<MediaItem>)
+            .map((e) => e.toJson())
+            .toList(),
+        'continuation': data['continuation'],
+      },
       networkFetch: () async {
         final query = <String, dynamic>{
           'videoId': videoId,
@@ -363,7 +378,7 @@ class MusicApi {
     );
   }
 
-  /// Lyrics (cached for 24 hours)
+  /// Lyrics (cached for 48 hours in memory & disk)
   Future<LyricsResponse> getLyrics({
     required String videoId,
     required String title,
@@ -375,8 +390,10 @@ class MusicApi {
 
     return _fetchCached<LyricsResponse>(
       cacheKey: cacheKey,
-      ttl: const Duration(hours: 24),
+      ttl: const Duration(hours: 48),
       forceRefresh: forceRefresh,
+      fromJson: (json) => LyricsResponse.fromJson(json),
+      toJson: (lyrics) => lyrics.toJson(),
       networkFetch: () async {
         final response = await _client.get(
           _uri('/api/lyrics', {
@@ -398,7 +415,7 @@ class MusicApi {
     );
   }
 
-  /// Related tracks and content (cached for 30 minutes)
+  /// Related tracks and content (cached for 1 hour)
   Future<Feed> getRelated(
     String videoId, {
     String? title,
@@ -409,7 +426,7 @@ class MusicApi {
 
     return _fetchCached<Feed>(
       cacheKey: cacheKey,
-      ttl: const Duration(minutes: 30),
+      ttl: const Duration(hours: 1),
       forceRefresh: forceRefresh,
       fromJson: (json) => Feed.fromJson(json),
       toJson: (feed) => feed.toJson(),

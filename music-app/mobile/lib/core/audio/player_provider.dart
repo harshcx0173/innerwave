@@ -9,11 +9,13 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 import '../api/music_api.dart';
 import '../models/media_model.dart';
+import 'innerwave_audio_handler.dart';
 
 enum PlayRepeatMode { off, all, one }
 
 class PlayerProvider extends ChangeNotifier {
   final MusicApi api;
+  final InnerWaveAudioHandler? audioHandler;
   final ja.AudioPlayer _audioPlayer = ja.AudioPlayer();
   final YoutubeExplode _youtube = YoutubeExplode();
 
@@ -26,6 +28,7 @@ class PlayerProvider extends ChangeNotifier {
   int _streamRequestId = 0;
   String? _loadedVideoId;
   final Set<String> _seenIds = {};
+  LyricsResponse? _currentLyrics;
 
   bool _isPlaying = false;
   Duration _position = Duration.zero;
@@ -49,10 +52,68 @@ class PlayerProvider extends ChangeNotifier {
   StreamSubscription? _bufferedSubscription;
   ja.ProcessingState _lastProcessingState = ja.ProcessingState.idle;
 
-  PlayerProvider({required this.api}) {
+  PlayerProvider({required this.api, this.audioHandler}) {
     _initAudioSession();
+    _initAudioServiceBridge();
     _initAudioStreams();
     _restoreSession();
+  }
+
+  void _initAudioServiceBridge() {
+    if (audioHandler == null) return;
+    audioHandler!.onPlayCallback = () async => togglePlayPause();
+    audioHandler!.onPauseCallback = () async => togglePlayPause();
+    audioHandler!.onNextCallback = () async => next();
+    audioHandler!.onPreviousCallback = () async => previous();
+    audioHandler!.onSeekCallback = (pos) async => seek(pos);
+    audioHandler!.onStopCallback = () async {
+      unawaited(_audioPlayer.stop());
+      _isPlaying = false;
+      notifyListeners();
+      _syncAudioService();
+    };
+  }
+
+  void _syncAudioService() {
+    if (audioHandler == null || _current == null) return;
+    audioHandler!.setMediaItem(
+      id: _current!.id,
+      title: _current!.title,
+      artist: _current!.artists.isNotEmpty
+          ? _current!.artists.join(', ')
+          : _current!.subtitle,
+      album: 'InnerWave',
+      artworkUrl: _current!.highResThumbnail,
+      duration: _duration > Duration.zero ? _duration : null,
+    );
+    audioHandler!.updatePlaybackState(
+      isPlaying: _isPlaying,
+      processingState: _lastProcessingState,
+      position: _position,
+      bufferedPosition: _bufferedPosition,
+      duration: _duration,
+      hasNext: _queueIndex + 1 < _queue.length || _queueContinuation != null,
+      hasPrevious: _queueIndex > 0 || _position.inSeconds > 4,
+    );
+  }
+
+  Future<void> _preloadLyricsAndRelated(MediaItem item) async {
+    final videoId = item.videoId ?? item.id;
+    final artist = item.artists.isNotEmpty
+        ? item.artists.first
+        : (item.subtitle.isNotEmpty ? item.subtitle : null);
+    try {
+      _currentLyrics = await api.getLyrics(
+        videoId: videoId,
+        title: item.title,
+        artist: artist,
+      );
+      notifyListeners();
+    } catch (_) {}
+
+    try {
+      unawaited(api.getRelated(videoId, title: item.title, artist: artist));
+    } catch (_) {}
   }
 
   Future<void> _initAudioSession() async {
@@ -65,6 +126,9 @@ class PlayerProvider extends ChangeNotifier {
   MediaItem? get current => _current;
   List<MediaItem> get queue => _queue;
   int get queueIndex => _queueIndex;
+  bool get isLoadingQueue => _isLoadingQueue;
+  bool get hasMoreQueue => _queueContinuation != null;
+  LyricsResponse? get currentLyrics => _currentLyrics;
   bool get isPlaying => _isPlaying;
   Duration get position => _position;
   Duration get duration => _duration;
@@ -142,6 +206,7 @@ class PlayerProvider extends ChangeNotifier {
       }
       _lastProcessingState = state.processingState;
       notifyListeners();
+      _syncAudioService();
     });
 
     _positionSubscription = _audioPlayer.positionStream.listen((position) {
@@ -151,6 +216,7 @@ class PlayerProvider extends ChangeNotifier {
     _durationSubscription = _audioPlayer.durationStream.listen((duration) {
       _duration = duration ?? Duration.zero;
       notifyListeners();
+      _syncAudioService();
     });
     _bufferedSubscription = _audioPlayer.bufferedPositionStream.listen((
       position,
@@ -207,6 +273,9 @@ class PlayerProvider extends ChangeNotifier {
       }
 
       notifyListeners();
+      if (_current != null) {
+        unawaited(_preloadLyricsAndRelated(_current!));
+      }
     } catch (_) {}
   }
 
@@ -266,6 +335,7 @@ class PlayerProvider extends ChangeNotifier {
     _originalQueue = List.from(_queue);
 
     notifyListeners();
+    unawaited(_preloadLyricsAndRelated(item));
     unawaited(_loadAndPlayStream(item.videoId!));
     unawaited(_persistSession());
   }
@@ -313,6 +383,7 @@ class PlayerProvider extends ChangeNotifier {
       _loadedVideoId = videoId;
       _error = null;
       unawaited(_audioPlayer.play());
+      _syncAudioService();
     } catch (error, stackTrace) {
       if (requestId != _streamRequestId) return;
       debugPrint(
@@ -349,8 +420,17 @@ class PlayerProvider extends ChangeNotifier {
         _queueIndex = 0;
         _queueContinuation = continuation;
         notifyListeners();
+        _checkAutoPrefetchQueue();
       }
     } catch (_) {}
+  }
+
+  void _checkAutoPrefetchQueue() {
+    if (_queueContinuation != null &&
+        !_isLoadingQueue &&
+        (_queue.length - _queueIndex) <= 8) {
+      unawaited(loadMoreQueue());
+    }
   }
 
   Future<void> loadMoreQueue() async {
@@ -360,6 +440,7 @@ class PlayerProvider extends ChangeNotifier {
       return;
     }
     _isLoadingQueue = true;
+    notifyListeners();
 
     try {
       final result = await api.getRadioQueue(
@@ -382,11 +463,15 @@ class PlayerProvider extends ChangeNotifier {
         _originalQueue = List.from(_queue);
         _queueContinuation = continuation;
         notifyListeners();
+        unawaited(_persistSession());
+      } else {
+        _queueContinuation = continuation;
       }
     } catch (_) {
       _queueContinuation = null;
     } finally {
       _isLoadingQueue = false;
+      notifyListeners();
     }
   }
 
@@ -411,14 +496,12 @@ class PlayerProvider extends ChangeNotifier {
       _current = nextItem;
       _seenIds.add(nextItem.id);
       notifyListeners();
+      unawaited(_preloadLyricsAndRelated(nextItem));
       if (nextItem.videoId != null) {
         _loadAndPlayStream(nextItem.videoId!);
       }
       _persistSession();
-
-      if (_queue.length - _queueIndex <= 6) {
-        loadMoreQueue();
-      }
+      _checkAutoPrefetchQueue();
     } else {
       unawaited(_audioPlayer.stop());
       _isPlaying = false;
@@ -438,6 +521,7 @@ class PlayerProvider extends ChangeNotifier {
       _current = prevItem;
       _seenIds.add(prevItem.id);
       notifyListeners();
+      unawaited(_preloadLyricsAndRelated(prevItem));
       if (prevItem.videoId != null) {
         _loadAndPlayStream(prevItem.videoId!);
       }
@@ -448,7 +532,9 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   void seek(Duration position) {
+    _position = position;
     unawaited(_audioPlayer.seek(position));
+    _syncAudioService();
   }
 
   void _onTrackEnded() {
@@ -490,27 +576,66 @@ class PlayerProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void reorderQueue(int oldIndex, int newIndex) {
-    if (oldIndex < 0 ||
-        oldIndex >= _queue.length ||
-        newIndex < 0 ||
-        newIndex >= _queue.length) {
+  void moveQueueItem(int from, int to) {
+    if (from < 0 ||
+        from >= _queue.length ||
+        to < 0 ||
+        to >= _queue.length ||
+        from == to) {
       return;
     }
-    if (oldIndex == _queueIndex) return;
+    if (from == _queueIndex) return;
 
-    final item = _queue.removeAt(oldIndex);
-    _queue.insert(newIndex, item);
-    if (_queueIndex > oldIndex && _queueIndex <= newIndex) {
+    final item = _queue.removeAt(from);
+    _queue.insert(to, item);
+    if (_queueIndex > from && _queueIndex <= to) {
       _queueIndex--;
-    } else if (_queueIndex < oldIndex && _queueIndex >= newIndex) {
+    } else if (_queueIndex < from && _queueIndex >= to) {
       _queueIndex++;
     }
+    _originalQueue = List.from(_queue);
     notifyListeners();
+    unawaited(_persistSession());
+  }
+
+  void reorderQueue(int oldIndex, int newIndex) {
+    moveQueueItem(oldIndex, newIndex);
+  }
+
+  void removeFromQueue(int index) {
+    if (index < 0 || index >= _queue.length) return;
+    if (index == _queueIndex) return;
+    _queue.removeAt(index);
+    if (_queueIndex > index) {
+      _queueIndex--;
+    }
+    _originalQueue = List.from(_queue);
+    notifyListeners();
+    unawaited(_persistSession());
+    _checkAutoPrefetchQueue();
+  }
+
+  void clearUpcomingQueue() {
+    if (_current == null || _queue.isEmpty) return;
+    _queue = [_current!];
+    _originalQueue = List.from(_queue);
+    _queueIndex = 0;
+    _queueContinuation = null;
+    notifyListeners();
+    unawaited(_persistSession());
+  }
+
+  bool _disposed = false;
+
+  @override
+  void notifyListeners() {
+    if (_disposed) return;
+    super.notifyListeners();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _playerStateSubscription?.cancel();
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
