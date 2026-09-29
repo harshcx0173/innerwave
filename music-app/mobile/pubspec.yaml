@@ -45,6 +45,7 @@ dependencies:
   youtube_explode_dart:
     path: packages/youtube_explode_dart
   audio_service: ^0.18.19
+  supabase_flutter: ^2.17.2
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -564,3 +564,23 @@ Deployment note: Render must receive the updated backend before production web/m
 - **Unit Tests**: `flutter test test/queue_policy_test.dart` passed (2/2 tests passed, exit code 0).
 - **Compilation**: `flutter build apk --debug` succeeded in 31.5s with exit code 0 (`build\app\outputs\flutter-apk\app-debug.apk`).
 - **Binary Distribution**: Latest compiled test APK preserved at `music-app/InnerWave-streaming-queue-debug.apk`.
+
+---
+
+## 16. Accounts and InnerWave Connect (2026-09-29)
+
+- Web and Flutter now support verified email/password accounts and Google sign-in through Supabase Auth.
+- Authenticated devices join a private per-user Realtime channel and publish Presence metadata.
+- A single active playback device owns the real audio transport; every other signed-in device becomes a remote controller.
+- Current song, radio/collection queue, active index, play/pause, position, next/previous, app volume, and queue reordering synchronize between web and mobile.
+- Playback state is also stored in `public.playback_sessions`, so refresh/reconnect does not depend only on an in-memory WebSocket message.
+- Flutter continues resolving YouTube streams on the phone. Web continues using the YouTube IFrame transport. No expiring stream URL is transferred between devices.
+- Database tables, RLS, profile trigger, and private Realtime authorization are defined in `supabase/migrations/001_auth_and_connect.sql`.
+- Full setup steps, file-level changes, security notes, and the manual two-device test checklist are in `AUTH_CONNECT_WORK_LOG.md`.
+
+### Current verification
+
+- Frontend lint: passed.
+- Frontend production build: passed.
+- Flutter tests: 3/3 passed.
+- Flutter analysis: 0 errors; only pre-existing/dependency warnings and informational lints remain.

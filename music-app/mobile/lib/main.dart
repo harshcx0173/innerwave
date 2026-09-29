@@ -1,11 +1,18 @@
+import 'dart:async';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/api/music_api.dart';
+import 'core/auth/auth_controller.dart';
+import 'core/auth/auth_screen.dart';
 import 'core/audio/innerwave_audio_handler.dart';
 import 'core/audio/player_provider.dart';
+import 'core/config/supabase_config.dart';
+import 'core/sync/playback_sync_controller.dart';
 import 'core/theme/app_theme.dart';
 import 'core/widgets/mini_player.dart';
 import 'features/home/home_screen.dart';
@@ -14,6 +21,10 @@ import 'features/library/library_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Supabase.initialize(
+    url: SupabaseConfig.url,
+    publishableKey: SupabaseConfig.publishableKey,
+  );
 
   final audioHandler = await AudioService.init(
     builder: () => InnerWaveAudioHandler(),
@@ -48,18 +59,24 @@ class InnerWaveApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         Provider<MusicApi>(create: (_) => MusicApi()),
+        ChangeNotifierProvider<AuthController>(create: (_) => AuthController()),
         ChangeNotifierProvider<PlayerProvider>(
           create: (context) => PlayerProvider(
             api: context.read<MusicApi>(),
             audioHandler: audioHandler,
           ),
         ),
+        ChangeNotifierProxyProvider2<AuthController, PlayerProvider,
+            PlaybackSyncController>(
+          create: (_) => PlaybackSyncController(),
+          update: (_, auth, player, sync) => sync!..update(auth, player),
+        ),
       ],
       child: MaterialApp(
         title: 'InnerWave',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.darkTheme,
-        home: const MainNavigationShell(),
+        home: const AuthGate(child: MainNavigationShell()),
       ),
     );
   }
@@ -81,6 +98,66 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     LibraryScreen(),
   ];
 
+  void _showConnect() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: const Color(0xFF151817),
+      builder: (sheetContext) => Consumer3<PlaybackSyncController, AuthController, PlayerProvider>(
+        builder: (_, sync, auth, player, child) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 6, 20, 22),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(auth.displayName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                Text(auth.user?.email ?? '', style: const TextStyle(color: Colors.white54)),
+                const SizedBox(height: 20),
+                const Text('InnerWave Connect', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 4),
+                const Text('Choose the device that should play music.', style: TextStyle(color: Colors.white54)),
+                const SizedBox(height: 10),
+                ...sync.devices.map((device) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(device.platform == 'Android' || device.platform == 'iOS' ? Icons.smartphone : Icons.computer),
+                      title: Text(device.name),
+                      subtitle: Text(device.id == sync.deviceId ? 'This device' : 'Online'),
+                      trailing: device.id == sync.activeDeviceId
+                          ? const Text('PLAYING', style: TextStyle(color: Color(0xFFD5FF63), fontSize: 11, fontWeight: FontWeight.w800))
+                          : null,
+                      onTap: () async {
+                        await sync.activateDevice(device.id);
+                        if (sheetContext.mounted) Navigator.pop(sheetContext);
+                      },
+                    )),
+                if (sync.devices.isEmpty)
+                  const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Text('Connecting…', style: TextStyle(color: Colors.white54))),
+                const SizedBox(height: 8),
+                Row(children: [
+                  const Icon(Icons.volume_down, size: 20),
+                  Expanded(
+                    child: Slider(
+                      value: player.volume,
+                      onChanged: (value) => unawaited(player.setVolume(value)),
+                    ),
+                  ),
+                  const Icon(Icons.volume_up, size: 20),
+                ]),
+                const Divider(),
+                TextButton.icon(
+                  onPressed: () async { Navigator.pop(sheetContext); await auth.signOut(); },
+                  icon: const Icon(Icons.logout),
+                  label: const Text('Sign out'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -88,6 +165,17 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
         children: [
           IndexedStack(index: _currentIndex, children: _screens),
           const Positioned(left: 0, right: 0, bottom: 0, child: MiniPlayer()),
+          Positioned(
+            right: 12,
+            top: MediaQuery.paddingOf(context).top + 8,
+            child: Consumer<PlaybackSyncController>(
+              builder: (_, sync, __) => IconButton.filledTonal(
+                onPressed: _showConnect,
+                tooltip: 'InnerWave Connect',
+                icon: Icon(Icons.speaker_group_outlined, color: sync.connected ? const Color(0xFFD5FF63) : Colors.white70),
+              ),
+            ),
+          ),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(

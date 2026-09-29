@@ -35,6 +35,10 @@ class PlayerProvider extends ChangeNotifier {
   Duration _duration = Duration.zero;
   Duration _bufferedPosition = Duration.zero;
   String? _error;
+  double _volume = 0.8;
+  bool _localPlaybackEnabled = true;
+  bool _applyingRemoteCommand = false;
+  bool Function(Map<String, dynamic> command)? _commandInterceptor;
 
   PlayRepeatMode _repeatMode = PlayRepeatMode.off;
   bool _shuffle = false;
@@ -53,6 +57,7 @@ class PlayerProvider extends ChangeNotifier {
   ja.ProcessingState _lastProcessingState = ja.ProcessingState.idle;
 
   PlayerProvider({required this.api, this.audioHandler}) {
+    unawaited(_audioPlayer.setVolume(_volume));
     _initAudioSession();
     _initAudioServiceBridge();
     _initAudioStreams();
@@ -134,6 +139,8 @@ class PlayerProvider extends ChangeNotifier {
   Duration get duration => _duration;
   Duration get bufferedPosition => _bufferedPosition;
   String? get error => _error;
+  double get volume => _volume;
+  bool get localPlaybackEnabled => _localPlaybackEnabled;
   PlayRepeatMode get repeatMode => _repeatMode;
   bool get shuffle => _shuffle;
   List<MediaItem> get history => _history;
@@ -199,6 +206,7 @@ class PlayerProvider extends ChangeNotifier {
 
   void _initAudioStreams() {
     _playerStateSubscription = _audioPlayer.playerStateStream.listen((state) {
+      if (!_localPlaybackEnabled) return;
       _isPlaying = state.playing;
       if (state.processingState == ja.ProcessingState.completed &&
           _lastProcessingState != ja.ProcessingState.completed) {
@@ -210,10 +218,12 @@ class PlayerProvider extends ChangeNotifier {
     });
 
     _positionSubscription = _audioPlayer.positionStream.listen((position) {
+      if (!_localPlaybackEnabled) return;
       _position = position;
       notifyListeners();
     });
     _durationSubscription = _audioPlayer.durationStream.listen((duration) {
+      if (!_localPlaybackEnabled) return;
       _duration = duration ?? Duration.zero;
       notifyListeners();
       _syncAudioService();
@@ -221,6 +231,7 @@ class PlayerProvider extends ChangeNotifier {
     _bufferedSubscription = _audioPlayer.bufferedPositionStream.listen((
       position,
     ) {
+      if (!_localPlaybackEnabled) return;
       _bufferedPosition = position;
       notifyListeners();
     });
@@ -311,6 +322,13 @@ class PlayerProvider extends ChangeNotifier {
 
   Future<void> play(MediaItem item, [List<MediaItem>? contextList]) async {
     if (item.videoId == null) return;
+    if (_intercept({
+      'action': 'play',
+      'item': item.toJson(),
+      'context': contextList?.map((entry) => entry.toJson()).toList(),
+    })) {
+      return;
+    }
 
     final queueRequestId = ++_queueRequestId;
     _error = null;
@@ -340,7 +358,11 @@ class PlayerProvider extends ChangeNotifier {
     unawaited(_persistSession());
   }
 
-  Future<void> _loadAndPlayStream(String videoId) async {
+  Future<void> _loadAndPlayStream(
+    String videoId, {
+    bool autoplay = true,
+    Duration start = Duration.zero,
+  }) async {
     final requestId = ++_streamRequestId;
     _position = Duration.zero;
     _duration = Duration.zero;
@@ -382,7 +404,12 @@ class PlayerProvider extends ChangeNotifier {
       }
       _loadedVideoId = videoId;
       _error = null;
-      unawaited(_audioPlayer.play());
+      if (start > Duration.zero) await _audioPlayer.seek(start);
+      if (autoplay) {
+        unawaited(_audioPlayer.play());
+      } else {
+        await _audioPlayer.pause();
+      }
       _syncAudioService();
     } catch (error, stackTrace) {
       if (requestId != _streamRequestId) return;
@@ -477,6 +504,7 @@ class PlayerProvider extends ChangeNotifier {
 
   void togglePlayPause() {
     if (_current == null) return;
+    if (_intercept({'action': 'toggle'})) return;
     final videoId = _current!.videoId;
     if (videoId != null && _loadedVideoId != videoId) {
       _loadAndPlayStream(videoId);
@@ -490,6 +518,7 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   void next() {
+    if (_intercept({'action': 'next'})) return;
     if (_queueIndex + 1 < _queue.length) {
       _queueIndex++;
       final nextItem = _queue[_queueIndex];
@@ -510,6 +539,7 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   void previous() {
+    if (_intercept({'action': 'previous'})) return;
     if (_position.inSeconds > 4) {
       unawaited(_audioPlayer.seek(Duration.zero));
       return;
@@ -532,6 +562,7 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   void seek(Duration position) {
+    if (_intercept({'action': 'seek', 'time': position.inMilliseconds / 1000})) return;
     _position = position;
     unawaited(_audioPlayer.seek(position));
     _syncAudioService();
@@ -547,6 +578,7 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   void toggleRepeat() {
+    if (_intercept({'action': 'repeat'})) return;
     if (_repeatMode == PlayRepeatMode.off) {
       _repeatMode = PlayRepeatMode.all;
     } else if (_repeatMode == PlayRepeatMode.all) {
@@ -558,6 +590,7 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   void toggleShuffle() {
+    if (_intercept({'action': 'shuffle'})) return;
     _shuffle = !_shuffle;
     if (_shuffle && _queue.isNotEmpty) {
       final currentItem = _current;
@@ -577,6 +610,7 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   void moveQueueItem(int from, int to) {
+    if (_intercept({'action': 'moveQueueItem', 'from': from, 'to': to})) return;
     if (from < 0 ||
         from >= _queue.length ||
         to < 0 ||
@@ -603,6 +637,7 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   void removeFromQueue(int index) {
+    if (_intercept({'action': 'removeFromQueue', 'index': index})) return;
     if (index < 0 || index >= _queue.length) return;
     if (index == _queueIndex) return;
     _queue.removeAt(index);
@@ -616,6 +651,7 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   void clearUpcomingQueue() {
+    if (_intercept({'action': 'clearUpcomingQueue'})) return;
     if (_current == null || _queue.isEmpty) return;
     _queue = [_current!];
     _originalQueue = List.from(_queue);
@@ -623,6 +659,133 @@ class PlayerProvider extends ChangeNotifier {
     _queueContinuation = null;
     notifyListeners();
     unawaited(_persistSession());
+  }
+
+  bool _intercept(Map<String, dynamic> command) {
+    if (_applyingRemoteCommand) return false;
+    return _commandInterceptor?.call(command) ?? false;
+  }
+
+  void setCommandInterceptor(
+    bool Function(Map<String, dynamic> command)? interceptor,
+  ) {
+    _commandInterceptor = interceptor;
+  }
+
+  Future<void> setVolume(double nextVolume) async {
+    if (_intercept({'action': 'volume', 'volume': nextVolume})) return;
+    _volume = nextVolume.clamp(0, 1).toDouble();
+    if (_localPlaybackEnabled) await _audioPlayer.setVolume(_volume);
+    notifyListeners();
+  }
+
+  void setLocalPlaybackEnabled(bool enabled) {
+    _localPlaybackEnabled = enabled;
+    if (!enabled) unawaited(_audioPlayer.pause());
+  }
+
+  Map<String, dynamic> createSyncSnapshot() => {
+    'current': _current?.toJson(),
+    'queue': _queue.map((item) => item.toJson()).toList(),
+    'queueIndex': _queueIndex,
+    'currentTime': _position.inMilliseconds / 1000,
+    'duration': _duration.inMilliseconds / 1000,
+    'volume': _volume,
+    'isPlaying': _isPlaying,
+    'queueContinuation': _queueContinuation,
+    'capturedAt': DateTime.now().millisecondsSinceEpoch,
+  };
+
+  Future<void> applyRemoteCommand(Map<String, dynamic> command) async {
+    _applyingRemoteCommand = true;
+    try {
+      final action = command['action'];
+      if (action == 'play') {
+        final item = MediaItem.fromJson(
+          Map<String, dynamic>.from(command['item'] as Map),
+        );
+        final context = (command['context'] as List<dynamic>?)
+            ?.map((entry) => MediaItem.fromJson(Map<String, dynamic>.from(entry as Map)))
+            .toList();
+        await play(item, context);
+      } else if (action == 'toggle') {
+        togglePlayPause();
+      } else if (action == 'next') {
+        next();
+      } else if (action == 'previous') {
+        previous();
+      } else if (action == 'seek') {
+        final seconds = ((command['time'] as num?) ?? 0).toDouble();
+        seek(Duration(milliseconds: (seconds * 1000).round()));
+      } else if (action == 'volume') {
+        await setVolume(((command['volume'] as num?) ?? 0.8).toDouble());
+      } else if (action == 'repeat') {
+        toggleRepeat();
+      } else if (action == 'shuffle') {
+        toggleShuffle();
+      } else if (action == 'moveQueueItem') {
+        moveQueueItem((command['from'] as num).toInt(), (command['to'] as num).toInt());
+      } else if (action == 'removeFromQueue') {
+        removeFromQueue((command['index'] as num).toInt());
+      } else if (action == 'clearUpcomingQueue') {
+        clearUpcomingQueue();
+      }
+    } finally {
+      _applyingRemoteCommand = false;
+    }
+  }
+
+  Future<void> applyRemoteSnapshot(
+    Map<String, dynamic> snapshot, {
+    required bool playLocally,
+  }) async {
+    _localPlaybackEnabled = playLocally;
+    final currentJson = snapshot['current'];
+    _current = currentJson is Map
+        ? MediaItem.fromJson(Map<String, dynamic>.from(currentJson))
+        : null;
+    _queue = (snapshot['queue'] as List<dynamic>? ?? const [])
+        .whereType<Map>()
+        .map((entry) => MediaItem.fromJson(Map<String, dynamic>.from(entry)))
+        .toList();
+    final maximumIndex = _queue.isEmpty ? 0 : _queue.length - 1;
+    _queueIndex = ((snapshot['queueIndex'] as num?) ?? 0)
+        .toInt()
+        .clamp(0, maximumIndex);
+    final capturedAt = ((snapshot['capturedAt'] as num?) ??
+            DateTime.now().millisecondsSinceEpoch)
+        .toInt();
+    final playing = snapshot['isPlaying'] == true;
+    final elapsedMs = playing
+        ? (DateTime.now().millisecondsSinceEpoch - capturedAt).clamp(0, 10000)
+        : 0;
+    _position = Duration(
+      milliseconds:
+          ((((snapshot['currentTime'] as num?) ?? 0).toDouble() * 1000).round() + elapsedMs),
+    );
+    _duration = Duration(
+      milliseconds: (((snapshot['duration'] as num?) ?? 0).toDouble() * 1000).round(),
+    );
+    _volume = ((snapshot['volume'] as num?) ?? 0.8)
+        .toDouble()
+        .clamp(0, 1);
+    _isPlaying = playing;
+    _queueContinuation = snapshot['queueContinuation'] as String?;
+    _seenIds.addAll(_queue.map((item) => item.id));
+    notifyListeners();
+    if (!playLocally) {
+      await _audioPlayer.pause();
+      return;
+    }
+    await _audioPlayer.setVolume(_volume);
+    final videoId = _current?.videoId;
+    if (videoId != null) {
+      await _loadAndPlayStream(
+        videoId,
+        autoplay: playing,
+        start: _position,
+      );
+    }
   }
 
   bool _disposed = false;

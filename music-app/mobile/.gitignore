@@ -3,8 +3,9 @@
 *.log
 *.zip
 .apk
-*. APK
-*.apk
+*.APK
+**/*.apk
+../*.apk
 
 
 # Miscellaneous

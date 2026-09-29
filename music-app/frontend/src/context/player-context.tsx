@@ -14,6 +14,27 @@ import { musicApi } from "@/lib/api";
 import type { MediaItem } from "@/lib/types";
 import { YoutubeTransport, type YoutubeTransportHandle } from "@/components/youtube-transport";
 
+export type PlayerSnapshot = {
+  current: MediaItem | null;
+  queue: MediaItem[];
+  queueIndex: number;
+  currentTime: number;
+  duration: number;
+  volume: number;
+  isPlaying: boolean;
+  queueContinuation: string | null;
+  capturedAt: number;
+};
+
+export type PlayerCommand =
+  | { action: "play"; item: MediaItem; context?: MediaItem[] }
+  | { action: "toggle" }
+  | { action: "next" }
+  | { action: "previous" }
+  | { action: "seek"; time: number }
+  | { action: "volume"; volume: number }
+  | { action: "moveQueueItem"; from: number; to: number };
+
 type PlayerContextValue = {
   current: MediaItem | null;
   queue: MediaItem[];
@@ -36,6 +57,11 @@ type PlayerContextValue = {
   toggleFullscreen: () => void;
   moveQueueItem: (from: number, to: number) => void;
   loadMoreQueue: () => void;
+  snapshot: PlayerSnapshot;
+  setCommandInterceptor: (interceptor: ((command: PlayerCommand) => boolean) | null) => void;
+  applyRemoteCommand: (command: PlayerCommand) => void;
+  applyRemoteSnapshot: (snapshot: PlayerSnapshot, playLocally: boolean) => void;
+  setLocalPlaybackEnabled: (enabled: boolean) => void;
 };
 
 type PersistedPlayer = {
@@ -67,6 +93,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const autoplayOnLoad = useRef(false);
   const queueRef = useRef<MediaItem[]>([]);
   const seenIdsRef = useRef<Set<string>>(new Set());
+  const commandInterceptorRef = useRef<((command: PlayerCommand) => boolean) | null>(null);
+  const localPlaybackEnabledRef = useRef(true);
   const [current, setCurrent] = useState<MediaItem | null>(null);
   const [queue, setQueue] = useState<MediaItem[]>([]);
   const [queueIndex, setQueueIndex] = useState(0);
@@ -131,7 +159,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer);
   }, [current, currentTime, isPlaying, queue, queueContinuation, queueIndex, volume]);
 
-  const play = useCallback((item: MediaItem, context: MediaItem[] = []) => {
+  const playLocal = useCallback((item: MediaItem, context: MediaItem[] = []) => {
     if (!item.videoId) return;
     transport.current?.stop();
     const playable = context.filter((entry) => entry.videoId);
@@ -151,7 +179,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     remember(item);
   }, []);
 
-  const next = useCallback(() => {
+  const nextLocal = useCallback(() => {
     setQueueIndex((index) => {
       const nextIndex = index + 1;
       if (nextIndex < queue.length) {
@@ -172,7 +200,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     });
   }, [queue]);
 
-  const previous = useCallback(() => {
+  const previousLocal = useCallback(() => {
     if (currentTime > 4) {
       transport.current?.seek(0);
       setCurrentTime(0);
@@ -196,8 +224,46 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     });
   }, [currentTime, queue]);
 
+  const seekLocal = useCallback((time: number) => {
+    setError(null);
+    const safeTime = Math.max(0, Math.min(duration || time, time));
+    resumeTime.current = safeTime;
+    if (localPlaybackEnabledRef.current) transport.current?.seek(safeTime);
+    setCurrentTime(safeTime);
+  }, [duration]);
+
+  const volumeLocal = useCallback((nextVolume: number) => {
+    setVolumeState(Math.max(0, Math.min(1, nextVolume)));
+  }, []);
+
+  const moveQueueItemLocal = useCallback((from: number, to: number) => {
+    setQueue((items) => {
+      if (from === queueIndex || to < 0 || to >= items.length) return items;
+      const copy = [...items];
+      const [moved] = copy.splice(from, 1);
+      copy.splice(to, 0, moved);
+      return copy;
+    });
+  }, [queueIndex]);
+
+  const runCommand = useCallback((command: PlayerCommand) => {
+    if (command.action === "play") playLocal(command.item, command.context);
+    else if (command.action === "toggle") { setError(null); setIsPlaying((playing) => !playing); }
+    else if (command.action === "next") nextLocal();
+    else if (command.action === "previous") previousLocal();
+    else if (command.action === "seek") seekLocal(command.time);
+    else if (command.action === "volume") volumeLocal(command.volume);
+    else if (command.action === "moveQueueItem") moveQueueItemLocal(command.from, command.to);
+  }, [moveQueueItemLocal, nextLocal, playLocal, previousLocal, seekLocal, volumeLocal]);
+
+  const dispatchCommand = useCallback((command: PlayerCommand) => {
+    if (commandInterceptorRef.current?.(command)) return;
+    runCommand(command);
+  }, [runCommand]);
+
   useEffect(() => {
     if (!current?.videoId) return;
+    if (!localPlaybackEnabledRef.current) return;
     if (queueRef.current.length > 1 && queueRef.current.some((item) => item.id === current.id)) return;
     let cancelled = false;
     musicApi.next(current).then(({ items, continuation }) => {
@@ -213,6 +279,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [current]);
 
   const loadMoreQueue = useCallback(() => {
+    if (!localPlaybackEnabledRef.current) return;
     if (!current || !queueContinuation || continuationLoading.current) return;
     const token = queueContinuation;
     continuationLoading.current = true;
@@ -234,7 +301,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     transport.current?.setVolume(volume);
-    if (isPlaying && current) {
+    if (!localPlaybackEnabledRef.current) {
+      transport.current?.pause();
+    } else if (isPlaying && current) {
       transport.current?.play();
     } else {
       transport.current?.pause();
@@ -242,7 +311,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [current, isPlaying, volume]);
 
   useEffect(() => {
-    if (!current?.videoId) return;
+    if (!current?.videoId || !localPlaybackEnabledRef.current) return;
     transport.current?.load(current.videoId, resumeTime.current, autoplayOnLoad.current);
     autoplayOnLoad.current = false;
   }, [current?.videoId]);
@@ -267,6 +336,48 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const snapshot = useMemo<PlayerSnapshot>(() => ({
+    current,
+    queue,
+    queueIndex,
+    currentTime,
+    duration,
+    volume,
+    isPlaying,
+    queueContinuation,
+    capturedAt: 0,
+  }), [current, currentTime, duration, isPlaying, queue, queueContinuation, queueIndex, volume]);
+
+  const applyRemoteSnapshot = useCallback((next: PlayerSnapshot, playLocally: boolean) => {
+    localPlaybackEnabledRef.current = playLocally;
+    const elapsed = next.isPlaying ? Math.max(0, (Date.now() - Number(next.capturedAt || Date.now())) / 1000) : 0;
+    const nextTime = Math.max(0, Number(next.currentTime || 0) + elapsed);
+    if (!playLocally) transport.current?.pause();
+    if (playLocally && next.current?.videoId !== current?.videoId) transport.current?.stop();
+    resumeTime.current = nextTime;
+    autoplayOnLoad.current = playLocally && next.isPlaying;
+    setCurrent(next.current);
+    setQueue(Array.isArray(next.queue) ? next.queue : []);
+    setQueueIndex(Math.max(0, Number(next.queueIndex) || 0));
+    setCurrentTime(nextTime);
+    setDuration(Math.max(0, Number(next.duration) || 0));
+    setVolumeState(Math.max(0, Math.min(1, Number(next.volume) || 0)));
+    setIsPlaying(Boolean(next.isPlaying));
+    setQueueContinuation(next.queueContinuation || null);
+    seenIdsRef.current = new Set((next.queue || []).map((item) => item.id));
+    if (playLocally && next.current?.videoId === current?.videoId) {
+      transport.current?.seek(nextTime);
+      transport.current?.setVolume(Math.max(0, Math.min(1, Number(next.volume) || 0)));
+      if (next.isPlaying) transport.current?.play();
+      else transport.current?.pause();
+    }
+  }, [current?.videoId]);
+
+  const setLocalPlaybackEnabled = useCallback((enabled: boolean) => {
+    localPlaybackEnabledRef.current = enabled;
+    if (!enabled) transport.current?.pause();
+  }, []);
+
   const value = useMemo<PlayerContextValue>(() => ({
     current,
     queue,
@@ -279,32 +390,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     buffered,
     volume,
     error,
-    play,
-    toggle: () => {
-      setError(null);
-      setIsPlaying((playing) => !playing);
-    },
-    next,
-    previous,
-    seek: (time) => {
-      setError(null);
-      const safeTime = Math.max(0, Math.min(duration || time, time));
-      resumeTime.current = safeTime;
-      transport.current?.seek(safeTime);
-      setCurrentTime(safeTime);
-    },
-    setVolume: (nextVolume) => setVolumeState(Math.max(0, Math.min(1, nextVolume))),
+    play: (item, context) => dispatchCommand({ action: "play", item, context }),
+    toggle: () => dispatchCommand({ action: "toggle" }),
+    next: () => dispatchCommand({ action: "next" }),
+    previous: () => dispatchCommand({ action: "previous" }),
+    seek: (time) => dispatchCommand({ action: "seek", time }),
+    setVolume: (nextVolume) => dispatchCommand({ action: "volume", volume: nextVolume }),
     setQueueOpen,
     toggleFullscreen,
     loadMoreQueue,
-    moveQueueItem: (from, to) => setQueue((items) => {
-      if (from === queueIndex || to < 0 || to >= items.length) return items;
-      const copy = [...items];
-      const [moved] = copy.splice(from, 1);
-      copy.splice(to, 0, moved);
-      return copy;
-    }),
-  }), [buffered, current, currentTime, duration, error, fullscreenOpen, isPlaying, loadMoreQueue, next, play, previous, queue, queueIndex, queueOpen, toggleFullscreen, volume]);
+    moveQueueItem: (from, to) => dispatchCommand({ action: "moveQueueItem", from, to }),
+    snapshot,
+    setCommandInterceptor: (interceptor) => { commandInterceptorRef.current = interceptor; },
+    applyRemoteCommand: runCommand,
+    applyRemoteSnapshot,
+    setLocalPlaybackEnabled,
+  }), [applyRemoteSnapshot, buffered, current, currentTime, dispatchCommand, duration, error, fullscreenOpen, isPlaying, loadMoreQueue, queue, queueIndex, queueOpen, runCommand, setLocalPlaybackEnabled, snapshot, toggleFullscreen, volume]);
 
   return (
     <PlayerContext.Provider value={value}>
@@ -316,8 +417,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           setDuration(nextDuration);
           setBuffered(nextBuffered);
         }}
-        onPlayingChange={setIsPlaying}
-        onEnded={next}
+        onPlayingChange={(playing) => { if (localPlaybackEnabledRef.current) setIsPlaying(playing); }}
+        onEnded={() => runCommand({ action: "next" })}
         onError={(message) => {
           setError(message);
           setIsPlaying(false);

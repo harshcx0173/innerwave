@@ -4,6 +4,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { LoaderCircle, Play, RefreshCw, Shuffle } from "lucide-react";
 import { usePlayer } from "@/context/player-context";
+import { useAuth } from "@/context/auth-context";
 import { musicApi } from "@/lib/api";
 import type { Feed, MediaItem, Shelf as ShelfType } from "@/lib/types";
 import { PlayerBar } from "./player-bar";
@@ -68,6 +69,8 @@ const USER_NAME_KEY = "innerwave-user-name";
 
 export function MusicApp() {
   const player = usePlayer();
+  const { displayName, user } = useAuth();
+  const userNameKey = `${USER_NAME_KEY}:${user?.id || "guest"}`;
   const [feed, setFeed] = useState<Feed>({ shelves: [] });
   const [userName, setUserName] = useState<string | null>(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
@@ -88,29 +91,26 @@ export function MusicApp() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      const saved = localStorage.getItem(USER_NAME_KEY);
-      if (saved && saved.trim()) {
-        setUserName(saved.trim());
-        setTitle(`Made for ${saved.trim()}`);
-      } else {
-        setOnboardingRequired(true);
-        setProfileModalOpen(true);
-      }
+      const saved = localStorage.getItem(userNameKey);
+      const resolved = saved?.trim() || displayName;
+      setUserName(resolved);
+      setTitle(`Made for ${resolved}`);
+      setOnboardingRequired(false);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [displayName, userNameKey]);
 
   const handleNameComplete = useCallback((name: string) => {
-    localStorage.setItem(USER_NAME_KEY, name);
+    localStorage.setItem(userNameKey, name);
     setUserName(name);
     setOnboardingRequired(false);
     setProfileModalOpen(false);
     setTitle(`Made for ${name}`);
-  }, []);
+  }, [userNameKey]);
 
   const loadHome = useCallback(async () => {
     setLoading(true); setError(null); setView("home");
-    const currentName = localStorage.getItem(USER_NAME_KEY);
+    const currentName = localStorage.getItem(userNameKey);
     setTitle(currentName ? `Made for ${currentName}` : "Made for your day");
     setCollection(null);
     setSubtitle("A living mix of fresh finds, familiar favorites and everything between.");
@@ -137,7 +137,7 @@ export function MusicApp() {
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load music"); }
     finally { setLoading(false); }
-  }, []);
+  }, [userNameKey]);
 
   const loadMore = useCallback(async () => {
     if (view !== "home" || loading || loadingMore || nextPage == null) return;

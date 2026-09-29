@@ -1,6 +1,16 @@
 # Local archives and backups
 backups/
 *.zip
+# Temp files
+*.codex-temp*
+*.log
+*.zip
+.apk
+*.APK
+*.apk
+**/*.apk
+../*.apk
+*.apk
 
 # Python
 music-app/.venv/
