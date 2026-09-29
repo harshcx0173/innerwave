@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/audio/player_provider.dart';
+import '../../core/audio/queue_policy.dart';
 import '../../core/models/media_model.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/media_art.dart';
@@ -226,9 +227,18 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _onItemTapped(MediaItem item, List<MediaItem> contextList) {
+  void _onItemTapped(MediaItem item, List<MediaItem> contextList, {Shelf? shelf}) {
     if (item.videoId != null) {
-      context.read<PlayerProvider>().play(item, contextList);
+      context.read<PlayerProvider>().play(
+        item,
+        shelf != null &&
+                startsSongRadioQueue(
+                  shelfId: shelf.id,
+                  shelfTitle: shelf.title,
+                )
+            ? const []
+            : contextList,
+      );
     } else if (item.browseId != null) {
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => CollectionScreen(item: item)),
@@ -859,7 +869,7 @@ class _HomeScreenState extends State<HomeScreen> {
               itemBuilder: (context, index) {
                 final item = shelf.items[index];
                 return GestureDetector(
-                  onTap: () => _onItemTapped(item, shelf.items),
+                  onTap: () => _onItemTapped(item, shelf.items, shelf: shelf),
                   child: Row(
                     children: [
                       MediaArt(item: item, width: 48, height: 48, borderRadius: 8),
@@ -953,7 +963,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   trailing: item.duration != null
                       ? Text(item.duration!, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11))
                       : const Icon(Icons.play_circle_outline, color: Colors.white24, size: 18),
-                  onTap: () => _onItemTapped(item, shelf.items),
+                  onTap: () => _onItemTapped(item, shelf.items, shelf: shelf),
                 ),
               );
             },
@@ -992,7 +1002,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 width: 135,
                 margin: const EdgeInsets.only(right: 12),
                 child: GestureDetector(
-                  onTap: () => _onItemTapped(item, shelf.items),
+                  onTap: () => _onItemTapped(item, shelf.items, shelf: shelf),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [

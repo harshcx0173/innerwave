@@ -471,4 +471,18 @@ At the time of this handoff:
 - **Flutter Test Suite (`flutter test`)**: Passed (100% tests passed).
 - **Full Documentation Log**: Maintained in detail in [`music-app/AntigravityWork.md`](file:///d:/InnerTubeOffice/music-app/AntigravityWork.md).
 
+---
+
+## 14. Queue Radio Fix (2026-09-29)
+
+- `/api/next` now prefers the actual YouTube Music `RDAMVM<videoId>` radio queue instead of constructing every initial queue from search results.
+- The search-generated queue remains available only as a Render/cloud-IP fallback.
+- Real radio responses preserve continuation tokens for scroll-based loading.
+- Continuation failures never replace the current queue with a different search queue.
+- Mobile continues to reject songs already present or seen and now uses the `queue_v2` cache namespace so stale pre-fix queues are ignored.
+- Automated backend coverage was added for the three queue-source branches. All 3 tests pass.
+- A real upstream probe returned 50 radio tracks and a continuation token.
+
+Deployment note: Render must receive the updated backend before production web/mobile clients can use the radio-first behavior. The mobile source must be rebuilt/reinstalled to receive the cache namespace update.
+
 

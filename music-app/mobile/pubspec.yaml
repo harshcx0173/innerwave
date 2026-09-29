@@ -36,12 +36,14 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^1.6.0
   audio_session: ^0.2.4
+  just_audio: ^0.10.6
   cached_network_image: ^4.0.2
   provider: ^6.1.5+1
   shared_preferences: ^2.5.5
   intl: ^0.20.3
   palette_generator: ^0.3.3+7
-  youtube_player_iframe: ^6.0.2
+  youtube_explode_dart:
+    path: packages/youtube_explode_dart
 dev_dependencies:
   flutter_test:
     sdk: flutter

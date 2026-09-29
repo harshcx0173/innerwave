@@ -58,7 +58,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
   void _onItemTapped(MediaItem item, List<MediaItem> contextList) {
     if (item.videoId != null) {
-      context.read<PlayerProvider>().play(item, contextList);
+      // Match the local web app: search results start a song-based radio queue.
+      context.read<PlayerProvider>().play(item, const []);
     } else if (item.browseId != null) {
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => CollectionScreen(item: item)),

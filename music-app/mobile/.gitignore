@@ -1,6 +1,10 @@
+# Temp files
+*.codex-temp*
+*.log
+*.zip
+
 # Miscellaneous
 *.class
-*.log
 *.pyc
 *.swp
 .DS_Store

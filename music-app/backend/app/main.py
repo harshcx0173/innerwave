@@ -157,20 +157,46 @@ def next_tracks(
 ) -> dict:
     if not videoId and not continuation:
         raise HTTPException(status_code=422, detail="videoId or continuation is required")
+
+    radio_error: Exception | None = None
     try:
-        if videoId and not continuation:
-            queue = _search_recommendations(videoId, title, artist)
-            return {
-                "items": queue,
-                "shelves": [{"id": "song-radio", "title": "Up next", "layout": "songs", "items": queue}],
-                "continuation": None,
-                "source": "search-radio",
-            }
         result = parse_feed(service.next(videoId, playlistId, params=params, index=index, continuation=continuation))
         queue = next((shelf["items"] for shelf in result["shelves"] if shelf["items"]), [])
-        return {"items": queue, "shelves": result["shelves"], "continuation": result["continuation"]}
+        if queue:
+            return {
+                "items": queue,
+                "shelves": result["shelves"],
+                "continuation": result["continuation"],
+                "source": "youtube-radio",
+            }
+        radio_error = RuntimeError("YouTube Music returned an empty radio queue")
     except Exception as exc:
-        raise upstream_error(exc) from exc
+        radio_error = exc
+
+    # Continuations cannot be reconstructed with search. Let the client keep
+    # the queue it already has instead of silently replacing it with a new one.
+    if continuation or not videoId:
+        assert radio_error is not None
+        raise upstream_error(radio_error) from radio_error
+
+    # Cloud-hosted IPs (notably Render) can occasionally have watch-next
+    # throttled. Search radio remains a resilient fallback, but it must not
+    # replace the higher-quality YouTube Music radio when that is available.
+    try:
+        queue = _search_recommendations(videoId, title, artist)
+        if not queue and radio_error is not None:
+            raise radio_error
+        return {
+            "items": queue,
+            "shelves": [{"id": "song-radio", "title": "Up next", "layout": "songs", "items": queue}],
+            "continuation": None,
+            "source": "search-radio-fallback",
+        }
+    except Exception as fallback_error:
+        detail = fallback_error if radio_error is None else RuntimeError(
+            f"radio failed ({radio_error}); search fallback failed ({fallback_error})"
+        )
+        raise upstream_error(detail) from fallback_error
 
 
 def _watch_tab(video_id: str, name: str) -> str:
