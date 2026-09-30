@@ -12,11 +12,16 @@ type AuthContextValue = {
   displayName: string;
   signIn: (email: string, password: string) => Promise<AuthResult>;
   signUp: (name: string, email: string, password: string) => Promise<AuthResult>;
+  resendVerification: (email: string) => Promise<AuthResult>;
   signInWithGoogle: () => Promise<AuthResult>;
   signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+function authCallbackUrl() {
+  return new URL("/auth/callback", window.location.origin).toString();
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -42,19 +47,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: { emailRedirectTo: window.location.origin, data: { display_name: name.trim() } },
+      options: { emailRedirectTo: authCallbackUrl(), data: { display_name: name.trim() } },
     });
     return { error: error?.message ?? null, needsEmailVerification: !error && !data.session };
   }, []);
   const signInWithGoogle = useCallback(async (): Promise<AuthResult> => {
-    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin } });
+    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: authCallbackUrl() } });
+    return { error: error?.message ?? null };
+  }, []);
+  const resendVerification = useCallback(async (email: string): Promise<AuthResult> => {
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: email.trim(),
+      options: { emailRedirectTo: authCallbackUrl() },
+    });
     return { error: error?.message ?? null };
   }, []);
   const signOut = useCallback(async () => { await supabase.auth.signOut(); }, []);
 
   const user = session?.user ?? null;
   const displayName = String(user?.user_metadata?.display_name || user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "InnerWave Listener");
-  const value = useMemo<AuthContextValue>(() => ({ session, user, loading, displayName, signIn, signUp, signInWithGoogle, signOut }), [displayName, loading, session, signIn, signInWithGoogle, signOut, signUp, user]);
+  const value = useMemo<AuthContextValue>(() => ({ session, user, loading, displayName, signIn, signUp, resendVerification, signInWithGoogle, signOut }), [displayName, loading, resendVerification, session, signIn, signInWithGoogle, signOut, signUp, user]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

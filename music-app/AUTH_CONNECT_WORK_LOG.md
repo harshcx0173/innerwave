@@ -43,9 +43,9 @@ Add one verified InnerWave account for web and Flutter, Google sign-in, and Spot
 1. Run `supabase/migrations/001_auth_and_connect.sql` once in the Supabase SQL editor.
 2. Authentication → URL Configuration:
    - Site URL: `https://innerwave-tau.vercel.app`
-   - Redirect URL: `https://innerwave-tau.vercel.app/**`
-   - Redirect URL: `http://localhost:3000/**`
-   - Redirect URL: `com.innerwave.mobile://login-callback/**`
+   - Redirect URL: `https://innerwave-tau.vercel.app/auth/callback`
+   - Redirect URL: `http://localhost:3000/auth/callback`
+   - Redirect URL: `com.innerwave.mobile://login-callback/`
 3. Authentication → Providers → Email: keep **Confirm email** enabled.
 4. Authentication → Providers → Google: keep the configured Web OAuth client enabled.
 5. Realtime settings: use private channels; the migration authorizes only the signed-in user’s own topic.
@@ -75,6 +75,8 @@ Redeploy Vercel after adding the variables.
 - Google sign in once on web and once on mobile.
 - Open both devices on the same account, select each device in turn, and verify play/pause, seek, next/previous, volume, and queue transfer.
 - Browser autoplay policy can require one initial click after transferring playback to web.
+- Google OAuth intentionally opens the system browser on mobile; the registered deep link returns to InnerWave after authentication.
+- Use the verification screen’s resend action if an older confirmation email was generated before the production callback was allow-listed.
 
 ## Security note
 

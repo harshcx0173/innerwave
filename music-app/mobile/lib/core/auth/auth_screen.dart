@@ -40,6 +40,18 @@ class _AuthScreenState extends State<AuthScreen> {
     setState(() { _busy = false; _error = error; });
   }
 
+  Future<void> _resend() async {
+    setState(() { _busy = true; _error = null; });
+    final error = await context.read<AuthController>().resendVerification(_email.text);
+    if (!mounted) return;
+    setState(() { _busy = false; _error = error; });
+    if (error == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Verification email sent again.')),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _name.dispose(); _email.dispose(); _password.dispose();
@@ -66,7 +78,9 @@ class _AuthScreenState extends State<AuthScreen> {
                           const Text('Verify your email', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
                           const SizedBox(height: 10),
                           Text('We sent a verification link to ${_email.text}. Verify it, then sign in.', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white60)),
+                          if (_error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.redAccent))),
                           const SizedBox(height: 22),
+                          FilledButton(onPressed: _busy ? null : _resend, child: Text(_busy ? 'Please wait…' : 'Resend verification email')),
                           TextButton(onPressed: () => setState(() { _verificationSent = false; _signUp = false; }), child: const Text('Back to sign in')),
                         ])
                       : Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [

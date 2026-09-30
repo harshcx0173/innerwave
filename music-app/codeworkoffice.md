@@ -289,9 +289,9 @@ Site URL:
 https://innerwave-tau.vercel.app
 
 Redirect URLs:
-https://innerwave-tau.vercel.app/**
-http://localhost:3000/**
-com.innerwave.mobile://login-callback/**
+https://innerwave-tau.vercel.app/auth/callback
+http://localhost:3000/auth/callback
+com.innerwave.mobile://login-callback/
 ```
 
 Authentication → Providers:

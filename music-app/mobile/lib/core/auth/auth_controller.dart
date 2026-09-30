@@ -78,6 +78,21 @@ class AuthController extends ChangeNotifier {
     }
   }
 
+  Future<String?> resendVerification(String email) async {
+    try {
+      await client.auth.resend(
+        type: OtpType.signup,
+        email: email.trim(),
+        emailRedirectTo: SupabaseConfig.mobileCallback,
+      );
+      return null;
+    } on AuthException catch (error) {
+      return error.message;
+    } catch (_) {
+      return 'Could not resend the verification email. Try again.';
+    }
+  }
+
   Future<void> signOut() => client.auth.signOut();
 
   @override

@@ -24,11 +24,18 @@ export function AuthScreen() {
     const result = await auth.signInWithGoogle();
     if (result.error) { setError(result.error); setBusy(false); }
   }
+  async function resend() {
+    setBusy(true); setError(null);
+    const result = await auth.resendVerification(email);
+    setBusy(false); setError(result.error);
+  }
 
   if (verificationSent) return (
     <main className="auth-shell"><section className="auth-card auth-confirmation">
       <MailCheck size={42} /><h1>Verify your email</h1><p>We sent a confirmation link to <strong>{email}</strong>. Verify it, then come back and sign in.</p>
-      <button className="auth-primary" onClick={() => { setVerificationSent(false); setMode("signin"); }}>Back to sign in</button>
+      {error && <div className="auth-error">{error}</div>}
+      <button className="auth-primary" onClick={resend} disabled={busy}>{busy ? <LoaderCircle className="spin" size={18} /> : "Resend verification email"}</button>
+      <button className="auth-switch" onClick={() => { setVerificationSent(false); setMode("signin"); setError(null); }}>Back to sign in</button>
     </section></main>
   );
 
