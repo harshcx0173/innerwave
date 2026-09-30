@@ -449,3 +449,53 @@ This proves the remaining issue was an exact-string mismatch: the Supabase redir
 - Pushed successfully to `origin/main` (`ec0b323..d334f42`).
 - Git author verified as `harshcx0173 <harshcx0173@gmail.com>`.
 - The updated APK was installed on the connected phone before generated build cleanup.
+
+## Production Connect API diagnosis — 2026-09-30 12:04:22 +05:30
+
+### User report
+
+- Web and mobile authentication now work.
+- `GET /rest/v1/playback_sessions` and `POST /rest/v1/playback_sessions` return HTTP 404.
+- “Choose where music plays. Controls stay synced.” does not function.
+
+### Verified root cause
+
+Read-only calls using the public publishable key returned:
+
+```text
+public.profiles          -> 404 PGRST205
+public.playback_sessions -> 404 PGRST205
+```
+
+Supabase message:
+
+```text
+Could not find the table 'public.playback_sessions' in the schema cache
+```
+
+This proves the entire production Auth/Connect migration has not been applied. The frontend URL, REST path, logged-in user filter, and client key are reaching the correct Supabase project; the database objects do not exist there.
+
+### Required production action
+
+Run the complete file below once in the Supabase SQL Editor for project `gbqmtmcjqdqgfkzuwqot`:
+
+```text
+supabase/migrations/001_auth_and_connect.sql
+```
+
+The complete migration is required because it creates:
+
+- `public.profiles`
+- `public.playback_sessions`
+- authenticated-user grants
+- owner-only RLS policies
+- profile trigger/backfill
+- private Realtime Broadcast and Presence policies on `realtime.messages`
+
+The Supabase CLI is not installed and no Supabase management access token/database password is present locally, so the migration cannot be safely applied from the terminal. The local migration file and the project SQL Editor were opened in Codex for the user. After the user runs it, recheck both REST resources and then test web/mobile Presence, device transfer, play/pause, seek, volume, and state persistence.
+
+### Code status
+
+- No application-code change is required for this 404.
+- The checked-in migration already contains the missing schema and policies.
+- No secret, access token, refresh token, or user session value was printed or stored.

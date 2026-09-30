@@ -596,3 +596,4 @@ Deployment note: Render must receive the updated backend before production web/m
 - Verified Android resolves and launches `com.innerwave.mobile://login-callback` through `com.innerwave.mobile/.MainActivity`.
 - Required Supabase URL Configuration is now exact rather than broad: production callback, localhost callback, and the mobile deep link.
 - Full timestamped diagnosis, evidence, changes, and remaining dashboard step are documented in `codexWork.md`.
+- Production check on 2026-09-30 found `profiles` and `playback_sessions` returning `404 PGRST205`; `supabase/migrations/001_auth_and_connect.sql` still needs to be run once in the production Supabase SQL Editor before Connect can work.
