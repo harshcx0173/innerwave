@@ -338,8 +338,17 @@ This file will be updated with the final timestamp, Git commit, deployment/push 
 ### Git
 
 - Implementation commit created: `97964da fix(auth): correct web and mobile callback recovery`
-- The implementation and this documentation are being pushed to `origin/main` so Vercel can deploy the new `/auth/callback` route.
+- Final work-log commit created: `672fdab docs: record auth redirect diagnosis and verification`.
+- Both commits were pushed to `origin/main` successfully.
 - Git author remains `harshcx0173 <harshcx0173@gmail.com>`.
+
+### Production deployment verification
+
+- Verified at `2026-09-30 11:27:15 +05:30`.
+- Requested `https://innerwave-tau.vercel.app/auth/callback` directly after the GitHub push.
+- Production returned HTTP `200`.
+- Returned HTML contained the new “Finishing sign in” callback UI.
+- This confirms Vercel deployed the callback route successfully.
 
 ### Disk cleanup
 
