@@ -361,7 +361,7 @@ After all builds, tests, APK installation, and deep-link verification completed:
 
 ### Usage safety checkpoint
 
-- Primary usage at final checkpoint: **30% used / 70% remaining**.
+- Primary usage after final GitHub/remote verification: **38% used / 62% remaining**.
 - The requested stop point was 40% remaining.
 - The threshold was not reached, so the work completed safely without an emergency stop.
 
