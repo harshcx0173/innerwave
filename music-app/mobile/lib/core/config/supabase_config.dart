@@ -11,5 +11,7 @@ class SupabaseConfig {
     defaultValue: 'sb_publishable__Vqh6AU8KimNPSNGeX_tFA_4ieBRkqS',
   );
 
-  static const mobileCallback = 'com.innerwave.mobile://login-callback/';
+  // This must exactly match the Supabase Auth redirect allow-list entry.
+  // A trailing slash is a different redirect and falls back to the Site URL.
+  static const mobileCallback = 'com.innerwave.mobile://login-callback';
 }

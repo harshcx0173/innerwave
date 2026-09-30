@@ -593,6 +593,6 @@ Deployment note: Render must receive the updated backend before production web/m
 - The callback handles returned OAuth errors, PKCE codes, restored implicit sessions, late auth events, and timeout recovery before returning the user to the app.
 - Web and Flutter verification screens can resend signup confirmation emails with the correct platform callback.
 - Rebuilt and installed the updated Android app on the connected phone.
-- Verified Android resolves and launches `com.innerwave.mobile://login-callback/` through `com.innerwave.mobile/.MainActivity`.
+- Verified Android resolves and launches `com.innerwave.mobile://login-callback` through `com.innerwave.mobile/.MainActivity`.
 - Required Supabase URL Configuration is now exact rather than broad: production callback, localhost callback, and the mobile deep link.
 - Full timestamped diagnosis, evidence, changes, and remaining dashboard step are documented in `codexWork.md`.

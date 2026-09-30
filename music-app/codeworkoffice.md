@@ -43,7 +43,7 @@ Response and decision:
 - Email/password signup requires Supabase email confirmation.
 - Signup displays a “Verify your email” screen when Supabase returns no active session.
 - Google OAuth is implemented on both web and Flutter.
-- The Flutter OAuth callback is `com.innerwave.mobile://login-callback/`.
+- The Flutter OAuth callback is `com.innerwave.mobile://login-callback`.
 
 ### 1.4 Google Cloud and Supabase provider setup
 
@@ -291,7 +291,7 @@ https://innerwave-tau.vercel.app
 Redirect URLs:
 https://innerwave-tau.vercel.app/auth/callback
 http://localhost:3000/auth/callback
-com.innerwave.mobile://login-callback/
+com.innerwave.mobile://login-callback
 ```
 
 Authentication → Providers:

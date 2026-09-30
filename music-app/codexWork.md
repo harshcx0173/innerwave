@@ -52,7 +52,7 @@ The initial response explained:
   - `mobile/lib/core/config/supabase_config.dart`
   - Android manifest, application ID, and MainActivity
 - Confirmed web was asking Supabase to redirect to `window.location.origin`.
-- Confirmed mobile was asking Supabase to redirect to `com.innerwave.mobile://login-callback/`.
+- At initial diagnosis, mobile was asking Supabase to redirect to `com.innerwave.mobile://login-callback/`; the trailing slash was later confirmed to mismatch the saved Supabase allow-list entry.
 - Confirmed Android source registered the same scheme and host.
 - Confirmed Android application ID and Kotlin package are both `com.innerwave.mobile`.
 
@@ -100,7 +100,7 @@ The production code was already sending the active Vercel origin. Redirecting to
 At `2026-09-30` the connected Android phone was queried with:
 
 ```text
-com.innerwave.mobile://login-callback/
+com.innerwave.mobile://login-callback
 ```
 
 Before reinstalling the new build, Android returned:
@@ -189,7 +189,7 @@ Changed:
 Added:
 
 - `resendVerification(email)` with `OtpType.signup`.
-- Mobile resend continues using `com.innerwave.mobile://login-callback/`.
+- Mobile resend uses `com.innerwave.mobile://login-callback`.
 - The mobile verification screen now includes a resend button, loading state, error output, and success Snackbar.
 
 ### 5. Environment template correction
@@ -248,7 +248,7 @@ Activity: com.innerwave.mobile/.MainActivity
 Complete
 ```
 
-This verifies that the updated installed APK now owns `com.innerwave.mobile://login-callback/` and Android can return Chrome OAuth to InnerWave.
+This verifies that the updated installed APK owns `com.innerwave.mobile://login-callback` and Android can return Chrome OAuth to InnerWave.
 
 ## Required Supabase dashboard configuration
 
@@ -265,7 +265,7 @@ https://innerwave-tau.vercel.app
 ```text
 https://innerwave-tau.vercel.app/auth/callback
 http://localhost:3000/auth/callback
-com.innerwave.mobile://login-callback/
+com.innerwave.mobile://login-callback
 ```
 
 Optional broader development/deployment patterns may be added only when genuinely needed. Exact production callbacks are preferred because they reduce redirect scope.
@@ -378,7 +378,7 @@ https://innerwave-tau.vercel.app
 Redirect URLs
 https://innerwave-tau.vercel.app/auth/callback
 http://localhost:3000/auth/callback
-com.innerwave.mobile://login-callback/
+com.innerwave.mobile://login-callback
 ```
 
 Then test:
@@ -386,3 +386,59 @@ Then test:
 1. Production Google login returns to `/auth/callback` and then `/`.
 2. Resent email confirmation returns to `/auth/callback` and then `/`.
 3. Mobile Google login opens Chrome and then returns to the installed InnerWave app.
+
+## Mobile OAuth trailing-slash fix — 2026-09-30 11:54:40 +05:30
+
+### User report
+
+- The production web Google login was retested by the user and works correctly.
+- The Flutter app still completed Google OAuth at `http://localhost:3000` instead of returning to InnerWave.
+
+### Server-level diagnosis
+
+The source and installed Android app were checked first:
+
+- Flutter sent `com.innerwave.mobile://login-callback/`.
+- Android registered scheme `com.innerwave.mobile` with host `login-callback`.
+- The installed package resolved that deep link to `com.innerwave.mobile/.MainActivity`.
+
+A read-only OAuth cancellation probe was then run against the Supabase Auth authorize/callback flow. Only the final destination origin/path was printed; no access token, provider token, refresh token, or OAuth state was logged.
+
+Results:
+
+```text
+https://innerwave-tau.vercel.app/auth/callback
+  -> accepted unchanged
+
+com.innerwave.mobile://login-callback/
+  -> rejected/fell back to http://localhost:3000
+
+com.innerwave.mobile://login-callback
+  -> accepted unchanged
+```
+
+This proves the remaining issue was an exact-string mismatch: the Supabase redirect allow-list contained the no-trailing-slash callback while Flutter sent the trailing-slash callback.
+
+### Code and documentation changes
+
+- Updated `mobile/lib/core/config/supabase_config.dart` so `mobileCallback` is exactly `com.innerwave.mobile://login-callback`.
+- Added a code comment explaining that a trailing slash is a different Supabase redirect and may fall back to the configured Site URL.
+- Corrected the canonical callback in `AUTH_CONNECT_WORK_LOG.md`, `codeworkoffice.md`, `PROJECT_STATUS.md`, and this work log.
+- No queue, streaming, player, web auth, database, or cross-device sync behavior was changed.
+
+### Verification
+
+- `flutter test`: all 3 tests passed.
+- `flutter analyze --no-fatal-infos --no-fatal-warnings`: zero compile errors; only 22 pre-existing warnings/info remain.
+- `flutter build apk --debug`: passed.
+- `adb install -r`: succeeded on device `RZGL504NCFW`.
+- Android resolved the exact callback to `com.innerwave.mobile/.MainActivity`.
+- ADB callback launch completed successfully with `Status: ok` and `LaunchState: COLD`.
+- Supabase cancellation probe confirmed the exact no-slash callback no longer falls back to localhost.
+
+### Disk and usage safety
+
+- Disk before the rebuild: C `19.52 GB` free, D `46.33 GB` free, E `2.12 GB` free, F `24.93 GB` free.
+- After APK installation, permanently removed only generated `mobile/build` (`2257.0 MB`); D increased to `47.53 GB` free.
+- Primary Codex window after diagnosis/build: `52% used / 48% remaining`.
+- The requested `40% remaining` stop threshold had not been reached at this checkpoint.

@@ -11,7 +11,7 @@ Add one verified InnerWave account for web and Flutter, Google sign-in, and Spot
 - Supabase email/password authentication on web and Flutter.
 - Email verification flow remains enforced by Supabase; signup shows a dedicated “check your inbox” state.
 - Google OAuth on web and Flutter.
-- Android and iOS callback scheme: `com.innerwave.mobile://login-callback/`.
+- Android and iOS callback scheme: `com.innerwave.mobile://login-callback`.
 - Account-scoped web display name so another signed-in user does not inherit the previous user’s local name.
 - `profiles` and `playback_sessions` database schema with user-owned RLS.
 - Private Supabase Realtime channel per user: `innerwave:<user-id>:playback`.
@@ -45,7 +45,7 @@ Add one verified InnerWave account for web and Flutter, Google sign-in, and Spot
    - Site URL: `https://innerwave-tau.vercel.app`
    - Redirect URL: `https://innerwave-tau.vercel.app/auth/callback`
    - Redirect URL: `http://localhost:3000/auth/callback`
-   - Redirect URL: `com.innerwave.mobile://login-callback/`
+   - Redirect URL: `com.innerwave.mobile://login-callback`
 3. Authentication → Providers → Email: keep **Confirm email** enabled.
 4. Authentication → Providers → Google: keep the configured Web OAuth client enabled.
 5. Realtime settings: use private channels; the migration authorizes only the signed-in user’s own topic.
