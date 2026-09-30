@@ -442,3 +442,10 @@ This proves the remaining issue was an exact-string mismatch: the Supabase redir
 - After APK installation, permanently removed only generated `mobile/build` (`2257.0 MB`); D increased to `47.53 GB` free.
 - Primary Codex window after diagnosis/build: `52% used / 48% remaining`.
 - The requested `40% remaining` stop threshold had not been reached at this checkpoint.
+
+### Git delivery
+
+- Commit: `d334f42 fix(auth): align mobile OAuth callback`.
+- Pushed successfully to `origin/main` (`ec0b323..d334f42`).
+- Git author verified as `harshcx0173 <harshcx0173@gmail.com>`.
+- The updated APK was installed on the connected phone before generated build cleanup.
