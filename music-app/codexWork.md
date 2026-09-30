@@ -6,6 +6,7 @@
 - Time zone: Asia/Calcutta (`UTC+05:30`)
 - Work started: `2026-09-30 11:01:33 +05:30`
 - First implementation checkpoint: `2026-09-30 11:17:57 +05:30`
+- Code/test/device work completed: `2026-09-30 11:23:07 +05:30`
 - Repository: `https://github.com/harshcx0173/innerwave.git`
 - Branch: `main`
 - Starting commit: `8e9195c feat: add Supabase auth and cross-device playback sync`
@@ -331,3 +332,48 @@ Remaining external step:
 - Sign in to the Supabase dashboard and save the exact Site URL and Redirect URLs listed above.
 
 This file will be updated with the final timestamp, Git commit, deployment/push status, disk cleanup, usage checkpoint, and final live-test result before the task is closed.
+
+## Final session update
+
+### Git
+
+- Implementation commit created: `97964da fix(auth): correct web and mobile callback recovery`
+- The implementation and this documentation are being pushed to `origin/main` so Vercel can deploy the new `/auth/callback` route.
+- Git author remains `harshcx0173 <harshcx0173@gmail.com>`.
+
+### Disk cleanup
+
+After all builds, tests, APK installation, and deep-link verification completed:
+
+- Removed generated `frontend/.next`: approximately `120.5 MB`.
+- Removed generated `mobile/build`: approximately `2257.1 MB`.
+- Total recovered in this cleanup: approximately `2.38 GB`.
+- The newly built APK had already been installed successfully on the connected phone before cleanup.
+
+### Usage safety checkpoint
+
+- Primary usage at final checkpoint: **30% used / 70% remaining**.
+- The requested stop point was 40% remaining.
+- The threshold was not reached, so the work completed safely without an emergency stop.
+
+### Final blocker and next action
+
+The local code, production build, Flutter build, installed Android deep link, and automated tests are complete. The only remaining blocker is authenticated access to the Supabase dashboard.
+
+The Supabase URL Configuration login tab was intentionally left open. After the user signs in, save:
+
+```text
+Site URL
+https://innerwave-tau.vercel.app
+
+Redirect URLs
+https://innerwave-tau.vercel.app/auth/callback
+http://localhost:3000/auth/callback
+com.innerwave.mobile://login-callback/
+```
+
+Then test:
+
+1. Production Google login returns to `/auth/callback` and then `/`.
+2. Resent email confirmation returns to `/auth/callback` and then `/`.
+3. Mobile Google login opens Chrome and then returns to the installed InnerWave app.
