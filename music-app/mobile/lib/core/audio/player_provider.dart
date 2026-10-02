@@ -27,6 +27,8 @@ class PlayerProvider extends ChangeNotifier {
   int _queueRequestId = 0;
   int _streamRequestId = 0;
   String? _loadedVideoId;
+  String? _sessionOwnerId;
+  int _sessionGeneration = 0;
   final Set<String> _seenIds = {};
   LyricsResponse? _currentLyrics;
 
@@ -61,7 +63,6 @@ class PlayerProvider extends ChangeNotifier {
     _initAudioSession();
     _initAudioServiceBridge();
     _initAudioStreams();
-    _restoreSession();
   }
 
   void _initAudioServiceBridge() {
@@ -125,6 +126,38 @@ class PlayerProvider extends ChangeNotifier {
     try {
       final session = await AudioSession.instance;
       await session.configure(const AudioSessionConfiguration.music());
+      await session.setActive(true);
+
+      session.interruptionEventStream.listen((event) {
+        if (event.begin) {
+          switch (event.type) {
+            case AudioInterruptionType.duck:
+              _audioPlayer.setVolume(_volume * 0.5);
+              break;
+            case AudioInterruptionType.pause:
+            case AudioInterruptionType.unknown:
+              if (_isPlaying) {
+                unawaited(_audioPlayer.pause());
+              }
+              break;
+          }
+        } else {
+          switch (event.type) {
+            case AudioInterruptionType.duck:
+              _audioPlayer.setVolume(_volume);
+              break;
+            case AudioInterruptionType.pause:
+              unawaited(_audioPlayer.play());
+              break;
+            case AudioInterruptionType.unknown:
+              break;
+          }
+        }
+      });
+
+      session.becomingNoisyEventStream.listen((_) {
+        unawaited(_audioPlayer.pause());
+      });
     } catch (_) {}
   }
 
@@ -148,12 +181,53 @@ class PlayerProvider extends ChangeNotifier {
   List<MediaItem> get likedSongs => _likedSongs;
   bool isLiked(String id) => _likedIds.contains(id);
 
+  String _userKey(String base, String userId) => '$base:$userId';
+
+  Future<void> setSessionOwner(String? userId) async {
+    if (_sessionOwnerId == userId) return;
+    final generation = ++_sessionGeneration;
+    _sessionOwnerId = userId;
+    ++_queueRequestId;
+    ++_streamRequestId;
+    _commandInterceptor = null;
+    _localPlaybackEnabled = true;
+    _sleepTimer?.cancel();
+    _sleepTimer = null;
+    _sleepTimerEndsAt = null;
+    await _audioPlayer.stop();
+    if (_sessionGeneration != generation || _sessionOwnerId != userId) return;
+    _loadedVideoId = null;
+    _current = null;
+    _queue = [];
+    _originalQueue = [];
+    _queueIndex = 0;
+    _queueContinuation = null;
+    _isLoadingQueue = false;
+    _seenIds.clear();
+    _currentLyrics = null;
+    _isPlaying = false;
+    _position = Duration.zero;
+    _duration = Duration.zero;
+    _bufferedPosition = Duration.zero;
+    _error = null;
+    _lastProcessingState = ja.ProcessingState.idle;
+    _history = [];
+    _playCounts = {};
+    _likedIds = {};
+    _likedSongs = [];
+    audioHandler?.clearMediaItem();
+    notifyListeners();
+    if (userId != null) await _restoreSession(userId, generation);
+  }
+
   bool get hasSleepTimer =>
       _sleepTimerEndsAt != null && _sleepTimerEndsAt!.isAfter(DateTime.now());
   Duration? get sleepTimerRemaining =>
       _sleepTimerEndsAt?.difference(DateTime.now());
 
   void toggleLike(MediaItem item) async {
+    final ownerId = _sessionOwnerId;
+    if (ownerId == null) return;
     if (_likedIds.contains(item.id)) {
       _likedIds.remove(item.id);
       _likedSongs.removeWhere((e) => e.id == item.id);
@@ -166,13 +240,14 @@ class PlayerProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final prefs = await SharedPreferences.getInstance();
+      if (_sessionOwnerId != ownerId) return;
       await prefs.setStringList(
-        'innerwave_mobile_liked_ids',
+        _userKey('innerwave_mobile_liked_ids', ownerId),
         _likedIds.toList(),
       );
       final jsonList = _likedSongs.map((e) => e.toJson()).toList();
       await prefs.setString(
-        'innerwave_mobile_liked_songs',
+        _userKey('innerwave_mobile_liked_songs', ownerId),
         json.encode(jsonList),
       );
     } catch (_) {}
@@ -237,10 +312,13 @@ class PlayerProvider extends ChangeNotifier {
     });
   }
 
-  Future<void> _restoreSession() async {
+  Future<void> _restoreSession(String userId, int generation) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final savedJson = prefs.getString('innertube_mobile_session');
+      if (_sessionOwnerId != userId || _sessionGeneration != generation) return;
+      final savedJson = prefs.getString(
+        _userKey('innertube_mobile_session', userId),
+      );
       if (savedJson != null) {
         final data = json.decode(savedJson) as Map<String, dynamic>;
         if (data['current'] != null) {
@@ -256,7 +334,9 @@ class PlayerProvider extends ChangeNotifier {
         }
       }
 
-      final historyJson = prefs.getString('innerwave_mobile_history');
+      final historyJson = prefs.getString(
+        _userKey('innerwave_mobile_history', userId),
+      );
       if (historyJson != null) {
         final raw = json.decode(historyJson) as List<dynamic>;
         _history = raw
@@ -264,18 +344,24 @@ class PlayerProvider extends ChangeNotifier {
             .toList();
       }
 
-      final countsJson = prefs.getString('innerwave_mobile_play_counts');
+      final countsJson = prefs.getString(
+        _userKey('innerwave_mobile_play_counts', userId),
+      );
       if (countsJson != null) {
         final rawCounts = json.decode(countsJson) as Map<String, dynamic>;
         _playCounts = rawCounts.map((k, v) => MapEntry(k, (v as num).toInt()));
       }
 
-      final likedList = prefs.getStringList('innerwave_mobile_liked_ids');
+      final likedList = prefs.getStringList(
+        _userKey('innerwave_mobile_liked_ids', userId),
+      );
       if (likedList != null) {
         _likedIds = likedList.toSet();
       }
 
-      final likedSongsJson = prefs.getString('innerwave_mobile_liked_songs');
+      final likedSongsJson = prefs.getString(
+        _userKey('innerwave_mobile_liked_songs', userId),
+      );
       if (likedSongsJson != null) {
         final raw = json.decode(likedSongsJson) as List<dynamic>;
         _likedSongs = raw
@@ -292,7 +378,10 @@ class PlayerProvider extends ChangeNotifier {
 
   Future<void> _persistSession() async {
     try {
+      final ownerId = _sessionOwnerId;
+      if (ownerId == null) return;
       final prefs = await SharedPreferences.getInstance();
+      if (_sessionOwnerId != ownerId) return;
       if (_current == null) return;
       final data = {
         'current': _current!.toJson(),
@@ -300,21 +389,24 @@ class PlayerProvider extends ChangeNotifier {
         'queueIndex': _queueIndex,
         'continuation': _queueContinuation,
       };
-      await prefs.setString('innertube_mobile_session', json.encode(data));
+      await prefs.setString(
+        _userKey('innertube_mobile_session', ownerId),
+        json.encode(data),
+      );
 
       // Save to recent history
       _history.removeWhere((item) => item.id == _current!.id);
       _history.insert(0, _current!);
       if (_history.length > 50) _history = _history.sublist(0, 50);
       await prefs.setString(
-        'innerwave_mobile_history',
+        _userKey('innerwave_mobile_history', ownerId),
         json.encode(_history.map((e) => e.toJson()).toList()),
       );
 
       // Increment and save play count
       _playCounts[_current!.id] = (_playCounts[_current!.id] ?? 0) + 1;
       await prefs.setString(
-        'innerwave_mobile_play_counts',
+        _userKey('innerwave_mobile_play_counts', ownerId),
         json.encode(_playCounts),
       );
     } catch (_) {}
@@ -367,16 +459,44 @@ class PlayerProvider extends ChangeNotifier {
     _position = Duration.zero;
     _duration = Duration.zero;
     _bufferedPosition = Duration.zero;
-    _isPlaying = false;
-    try {
-      await _audioPlayer.stop();
+    if (autoplay) {
+      _isPlaying = true;
+      _lastProcessingState = ja.ProcessingState.loading;
+      _syncAudioService();
+    } else {
+      _isPlaying = false;
+      _lastProcessingState = ja.ProcessingState.idle;
+      _syncAudioService();
+    }
 
-      // Resolve on the listener's device. This avoids sending playback
-      // extraction through Render's datacenter IP, which YouTube challenges.
-      final manifest = await _youtube.videos.streams.getManifest(
-        videoId,
-        ytClients: const [YoutubeApiClient.visionOs],
-      );
+    try {
+      // Resolve on the listener's device with resilient retry logic.
+      // Retrying ensures background network re-connections (screen lock / doze)
+      // do not cause the stream fetch to abort.
+      StreamManifest? manifest;
+      Object? lastManifestError;
+      for (var attempt = 0; attempt < 3; attempt++) {
+        if (requestId != _streamRequestId) return;
+        try {
+          manifest = await _youtube.videos.streams
+              .getManifest(
+                videoId,
+                ytClients: const [YoutubeApiClient.visionOs],
+              )
+              .timeout(const Duration(seconds: 15));
+          break;
+        } catch (e) {
+          lastManifestError = e;
+          if (attempt < 2) {
+            await Future.delayed(const Duration(milliseconds: 600));
+          }
+        }
+      }
+
+      if (manifest == null) {
+        throw (lastManifestError ??
+            StateError('YouTube returned no manifest.'));
+      }
       if (requestId != _streamRequestId) return;
 
       final audioStreams = manifest.audioOnly.toList();
@@ -531,6 +651,17 @@ class PlayerProvider extends ChangeNotifier {
       }
       _persistSession();
       _checkAutoPrefetchQueue();
+    } else if (_queueContinuation != null && !_isLoadingQueue) {
+      unawaited(() async {
+        await loadMoreQueue();
+        if (_queueIndex + 1 < _queue.length) {
+          next();
+        } else {
+          unawaited(_audioPlayer.stop());
+          _isPlaying = false;
+          notifyListeners();
+        }
+      }());
     } else {
       unawaited(_audioPlayer.stop());
       _isPlaying = false;
@@ -562,7 +693,12 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   void seek(Duration position) {
-    if (_intercept({'action': 'seek', 'time': position.inMilliseconds / 1000})) return;
+    if (_intercept({
+      'action': 'seek',
+      'time': position.inMilliseconds / 1000,
+    })) {
+      return;
+    }
     _position = position;
     unawaited(_audioPlayer.seek(position));
     _syncAudioService();
@@ -705,7 +841,10 @@ class PlayerProvider extends ChangeNotifier {
           Map<String, dynamic>.from(command['item'] as Map),
         );
         final context = (command['context'] as List<dynamic>?)
-            ?.map((entry) => MediaItem.fromJson(Map<String, dynamic>.from(entry as Map)))
+            ?.map(
+              (entry) =>
+                  MediaItem.fromJson(Map<String, dynamic>.from(entry as Map)),
+            )
             .toList();
         await play(item, context);
       } else if (action == 'toggle') {
@@ -724,7 +863,10 @@ class PlayerProvider extends ChangeNotifier {
       } else if (action == 'shuffle') {
         toggleShuffle();
       } else if (action == 'moveQueueItem') {
-        moveQueueItem((command['from'] as num).toInt(), (command['to'] as num).toInt());
+        moveQueueItem(
+          (command['from'] as num).toInt(),
+          (command['to'] as num).toInt(),
+        );
       } else if (action == 'removeFromQueue') {
         removeFromQueue((command['index'] as num).toInt());
       } else if (action == 'clearUpcomingQueue') {
@@ -749,26 +891,29 @@ class PlayerProvider extends ChangeNotifier {
         .map((entry) => MediaItem.fromJson(Map<String, dynamic>.from(entry)))
         .toList();
     final maximumIndex = _queue.isEmpty ? 0 : _queue.length - 1;
-    _queueIndex = ((snapshot['queueIndex'] as num?) ?? 0)
-        .toInt()
-        .clamp(0, maximumIndex);
-    final capturedAt = ((snapshot['capturedAt'] as num?) ??
-            DateTime.now().millisecondsSinceEpoch)
-        .toInt();
+    _queueIndex = ((snapshot['queueIndex'] as num?) ?? 0).toInt().clamp(
+      0,
+      maximumIndex,
+    );
+    final capturedAt =
+        ((snapshot['capturedAt'] as num?) ??
+                DateTime.now().millisecondsSinceEpoch)
+            .toInt();
     final playing = snapshot['isPlaying'] == true;
     final elapsedMs = playing
         ? (DateTime.now().millisecondsSinceEpoch - capturedAt).clamp(0, 10000)
         : 0;
     _position = Duration(
       milliseconds:
-          ((((snapshot['currentTime'] as num?) ?? 0).toDouble() * 1000).round() + elapsedMs),
+          ((((snapshot['currentTime'] as num?) ?? 0).toDouble() * 1000)
+              .round() +
+          elapsedMs),
     );
     _duration = Duration(
-      milliseconds: (((snapshot['duration'] as num?) ?? 0).toDouble() * 1000).round(),
+      milliseconds: (((snapshot['duration'] as num?) ?? 0).toDouble() * 1000)
+          .round(),
     );
-    _volume = ((snapshot['volume'] as num?) ?? 0.8)
-        .toDouble()
-        .clamp(0, 1);
+    _volume = ((snapshot['volume'] as num?) ?? 0.8).toDouble().clamp(0, 1);
     _isPlaying = playing;
     _queueContinuation = snapshot['queueContinuation'] as String?;
     _seenIds.addAll(_queue.map((item) => item.id));
@@ -780,11 +925,7 @@ class PlayerProvider extends ChangeNotifier {
     await _audioPlayer.setVolume(_volume);
     final videoId = _current?.videoId;
     if (videoId != null) {
-      await _loadAndPlayStream(
-        videoId,
-        autoplay: playing,
-        start: _position,
-      );
+      await _loadAndPlayStream(videoId, autoplay: playing, start: _position);
     }
   }
 

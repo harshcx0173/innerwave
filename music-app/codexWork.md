@@ -499,3 +499,131 @@ The Supabase CLI is not installed and no Supabase management access token/databa
 - No application-code change is required for this 404.
 - The checked-in migration already contains the missing schema and policies.
 - No secret, access token, refresh token, or user session value was printed or stored.
+
+## Logout/login playback recovery — 2026-10-02 13:37:01 +05:30
+
+### User report and constraint
+
+- After signing out and signing back in on web or mobile, the previous session's song remained stuck and neither that song nor newly selected songs would play.
+- The user explicitly instructed that this work must **not** be pushed to GitHub.
+
+### Root causes
+
+1. Web player state and listening history used global browser storage keys, so one authenticated session could restore another session's stale local player snapshot.
+2. Flutter player state, queue, history, play counts, and likes used global `SharedPreferences` keys instead of account-specific keys.
+3. Flutter's long-lived `PlayerProvider` survived logout and retained the previous queue, audio transport, MediaStyle notification, command interceptor, and local-playback ownership state.
+4. `playback_sessions.active_device_id` could continue pointing to a device that had gone offline during logout. After login, controls were intercepted and sent to that offline device, leaving the current device paused and apparently frozen.
+5. Rapid logout/login events could overlap asynchronous reconnect/reset operations.
+6. If durable Supabase playback-session storage was temporarily unavailable, Flutter reconnect could abort before establishing safe local playback.
+
+### Implemented changes
+
+#### Web
+
+- `frontend/src/context/player-context.tsx`
+  - Player persistence is now namespaced by authenticated user ID: `innertube-player-session-v2:<user-id>`.
+  - Listening history is now namespaced as `innerwave-history:<user-id>`.
+  - On account identity change, transport, queue, timing, continuation, error, autoplay, seen IDs, local-playback ownership, and command interception are reset before restoring that account's snapshot.
+- `frontend/src/components/music-app.tsx`
+  - Home recommendations and Library history now read the same per-user history key.
+- `frontend/src/context/connect-context.tsx`
+  - Presence sync detects when the persisted active device is offline.
+  - If the current browser is online and the active device is absent, playback ownership is automatically reclaimed by the current browser.
+
+#### Flutter mobile
+
+- `mobile/lib/core/audio/player_provider.dart`
+  - Added explicit authenticated session ownership with generation-based race protection.
+  - Logout/account changes stop audio and clear the current song, queue, queue continuation, stream/queue requests, lyrics, timers, error, position, duration, cached ownership, history, likes, and notification state from memory.
+  - Session, history, play counts, liked IDs, and liked songs are now stored under per-user keys.
+  - Async persistence refuses to write if the authenticated owner changes while an operation is in flight.
+- `mobile/lib/core/audio/innerwave_audio_handler.dart`
+  - Added `clearMediaItem()` so logout removes the stale system media item and resets MediaSession controls to idle.
+- `mobile/lib/core/sync/playback_sync_controller.dart`
+  - Auth changes now await player-owner reset/restore before reconnecting.
+  - Added reconnect-generation checks so an older logout/login task cannot overwrite a newer session.
+  - Disconnect restores safe local playback and clears stale active-device/revision state.
+  - Presence automatically reclaims playback when the stored active device is no longer online.
+  - Failure to read durable `playback_sessions` is logged and falls back to local playback instead of breaking the player.
+
+### Verification
+
+- Frontend `npm run lint`: passed.
+- Frontend clean `npm run build`: passed, including TypeScript and static generation.
+- An initial build encountered a stale generated `.next/dev/types/validator.ts`; removing only `.next` and rebuilding resolved it, confirming no source TypeScript failure.
+- Flutter `flutter test`: all 3 tests passed.
+- Flutter analyzer: zero compile errors; remaining findings are existing style/deprecation/vendor information.
+- Flutter debug APK: built successfully.
+- Final APK: installed successfully on connected device `RZGL504NCFW`.
+- Installed app process launched successfully and `com.innerwave.mobile/.MainActivity` was the foreground activity.
+
+### Disk and delivery status
+
+- Removed generated `frontend/.next`: `124.2 MB`.
+- Removed generated `mobile/build`: `2257.8 MB`.
+- Final free space: C `16.63 GB`, D `46.88 GB`, E `2.12 GB`, F `24.39 GB`.
+- Primary Codex usage checkpoint before documentation: `54% used / 46% remaining`.
+- No Git commit was created and nothing was pushed to GitHub, as explicitly requested.
+- Pre-existing uncommitted Antigravity changes were preserved.
+
+## Cross-device seekbar and synced-lyrics stabilization — 2026-10-02 13:52:28 +05:30
+
+### User report
+
+- During web/mobile synchronization, the seekbar repeatedly moved forward and backward.
+- Synced lyrics repeatedly scrolled down, returned to the current timeline, and moved down again.
+- During the same session, the web reported `playerRef.current?.setVolume is not a function` and `seekTo is not a function` from `YoutubeTransport`.
+- The user changed the safety stop threshold to **10% primary usage remaining**.
+- GitHub push remains explicitly prohibited.
+
+### Root causes
+
+1. The inactive web device correctly received one-second remote snapshots, but its hidden local YouTube iframe still emitted its own 500ms timer values. Both sources wrote `currentTime`, creating the forward/backward seekbar loop; lyrics followed the oscillating timeline.
+2. A normal Realtime `state` event was allowed to replace the active-device ID. A delayed state packet from the previous owner could therefore undo a newer device transfer.
+3. Equal revision packets were accepted, allowing duplicate/colliding state application.
+4. Offline-device reclaim ran immediately and independently on each device. During presence convergence, multiple clients could temporarily see only themselves and claim playback simultaneously.
+5. Web lyrics used `scrollIntoView`, which could scroll ancestors beyond the lyrics container.
+6. The YouTube iframe player object can exist before its methods are ready. Optional chaining protected only the object, not missing `setVolume`/`seekTo` methods.
+
+### Implemented fixes
+
+- `frontend/src/context/player-context.tsx`
+  - Hidden/local YouTube timer callbacks are ignored while that browser is not the active playback device.
+  - Account-reset state updates are deferred inside the effect timer, satisfying React's effect-state rule.
+- `frontend/src/context/connect-context.tsx`
+  - Presence reclaim waits 800ms for the presence set to stabilize.
+  - Online device IDs are sorted and only one deterministically elected device may reclaim an absent owner.
+  - Initial no-owner state allows local playback until election completes.
+  - Normal state packets must come from their declared active device, must match the currently known owner, and must have a strictly newer revision.
+  - Only `active_device` transfer events may change an existing owner.
+- `mobile/lib/core/sync/playback_sync_controller.dart`
+  - Added the same delayed deterministic presence election.
+  - Added strict owner validation and strictly increasing revision checks.
+  - No-owner startup remains locally playable while presence converges.
+  - Presence reclaim timer is cancelled during disconnect/dispose.
+- `frontend/src/components/queue-panel.tsx`
+  - Synced lyrics now scroll only their own panel using a calculated panel-local offset; ancestor/page scrolling is avoided.
+- `frontend/src/components/youtube-transport.tsx`
+  - Player commands are gated by an explicit ready state and method-existence checks.
+  - Pending load, seek, volume, and play/pause/stop intent are queued until `onReady` returns a valid player target.
+  - Stale/disposed iframe callbacks are rejected, timer getters are guarded, and cleanup safely destroys only the created player.
+
+### Verification
+
+- Frontend ESLint: passed.
+- Frontend TypeScript (`tsc --noEmit --incremental false`): passed.
+- Local dev server: HTTP 200 and rendered the InnerWave auth screen.
+- Read-only browser runtime check after hot reload: zero console errors; the reported `setVolume` and `seekTo` TypeErrors did not recur.
+- Flutter tests: all 3 passed.
+- Flutter analyzer: zero compile errors; only 20 existing info/deprecation/vendor findings remain.
+- Flutter debug APK build: passed.
+- Phone installation could not be completed because ADB reported no connected device at install time.
+- Updated local APK artifact: `InnerWave-streaming-queue-debug.apk` (`165.2 MB`).
+
+### Disk, Git, and usage status
+
+- Removed generated `mobile/build`: `2105.0 MB`.
+- Final measured free space: C `16.40 GB`, D `46.84 GB`, E `2.12 GB`, F `24.39 GB`.
+- `frontend/.next` was left in place because the user's dev server is currently running and actively uses it.
+- Final primary usage checkpoint: `77% used / 23% remaining`; the new 10% stop threshold was not reached.
+- No commit was created and nothing was pushed to GitHub.

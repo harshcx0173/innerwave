@@ -41,6 +41,7 @@ export function ConnectProvider({ children }: { children: ReactNode }) {
   const channelRef = useRef<RealtimeChannel | null>(null);
   const activeRef = useRef<string | null>(null);
   const revisionRef = useRef(0);
+  const presenceReclaimTimerRef = useRef<number | null>(null);
   const [connected, setConnected] = useState(false);
   const [devices, setDevices] = useState<PlaybackDevice[]>([]);
   const [activeDeviceId, setActiveDeviceId] = useState<string | null>(null);
@@ -92,6 +93,21 @@ export function ConnectProvider({ children }: { children: ReactNode }) {
           if (value.id) unique.set(value.id, value);
         });
         setDevices([...unique.values()]);
+        const active = activeRef.current;
+        if (presenceReclaimTimerRef.current) window.clearTimeout(presenceReclaimTimerRef.current);
+        if (unique.has(deviceId) && (!active || !unique.has(active))) {
+          presenceReclaimTimerRef.current = window.setTimeout(() => {
+            const latest = channel.presenceState<PlaybackDevice>();
+            const onlineIds = new Set(
+              Object.values(latest).flat().map((entry) => (entry as unknown as PlaybackDevice).id).filter(Boolean),
+            );
+            const elected = [...onlineIds].sort()[0];
+            const latestActive = activeRef.current;
+            if (elected === deviceId && (!latestActive || !onlineIds.has(latestActive))) {
+              void activateDevice(deviceId);
+            }
+          }, 800);
+        }
       })
       .on("broadcast", { event: "command" }, ({ payload }: { payload: CommandPayload }) => {
         if (payload.origin === deviceId || payload.target !== deviceId || activeRef.current !== deviceId) return;
@@ -99,14 +115,16 @@ export function ConnectProvider({ children }: { children: ReactNode }) {
         window.setTimeout(() => void sendState(true), 250);
       })
       .on("broadcast", { event: "state" }, ({ payload }: { payload: StatePayload }) => {
-        if (payload.origin === deviceId || payload.revision < revisionRef.current) return;
+        if (payload.origin === deviceId || payload.origin !== payload.activeDeviceId) return;
+        if (activeRef.current && payload.activeDeviceId !== activeRef.current) return;
+        if (payload.revision <= revisionRef.current) return;
         revisionRef.current = payload.revision;
-        activeRef.current = payload.activeDeviceId;
+        if (!activeRef.current) activeRef.current = payload.activeDeviceId;
         setActiveDeviceId(payload.activeDeviceId);
         playerRef.current.applyRemoteSnapshot(payload.snapshot, false);
       })
       .on("broadcast", { event: "active_device" }, ({ payload }: { payload: StatePayload }) => {
-        if (payload.revision < revisionRef.current) return;
+        if (payload.revision <= revisionRef.current) return;
         revisionRef.current = payload.revision;
         activeRef.current = payload.activeDeviceId;
         setActiveDeviceId(payload.activeDeviceId);
@@ -117,19 +135,17 @@ export function ConnectProvider({ children }: { children: ReactNode }) {
       await supabase.realtime.setAuth(session.access_token);
       const { data } = await supabase.from("playback_sessions").select("active_device_id,state,revision").eq("user_id", user.id).maybeSingle();
       if (cancelled) return;
-      let active = data?.active_device_id as string | null;
-      if (!active) active = deviceId;
+      const active = data?.active_device_id as string | null;
       activeRef.current = active;
       revisionRef.current = Number(data?.revision || 0);
       setActiveDeviceId(active);
-      if (data?.state && Object.keys(data.state).length) playerRef.current.applyRemoteSnapshot(data.state as PlayerSnapshot, active === deviceId);
-      else playerRef.current.setLocalPlaybackEnabled(active === deviceId);
+      if (data?.state && Object.keys(data.state).length) playerRef.current.applyRemoteSnapshot(data.state as PlayerSnapshot, !active || active === deviceId);
+      else playerRef.current.setLocalPlaybackEnabled(!active || active === deviceId);
       channel.subscribe(async (status) => {
         const ready = status === "SUBSCRIBED";
         setConnected(ready);
         if (!ready) return;
         await channel.track(device);
-        if (!data?.active_device_id) await activateDevice(deviceId);
       });
     })();
 
@@ -142,6 +158,8 @@ export function ConnectProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
+      if (presenceReclaimTimerRef.current) window.clearTimeout(presenceReclaimTimerRef.current);
+      presenceReclaimTimerRef.current = null;
       playerRef.current.setCommandInterceptor(null);
       setConnected(false);
       channelRef.current = null;

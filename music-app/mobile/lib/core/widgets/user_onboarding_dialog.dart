@@ -106,10 +106,11 @@ class _UserOnboardingDialogState extends State<UserOnboardingDialog> {
             ],
           ),
           padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
               Row(
                 children: [
                   Container(
@@ -266,6 +267,7 @@ class _UserOnboardingDialogState extends State<UserOnboardingDialog> {
                 ),
               ),
             ],
+          ),
           ),
         ),
       ),

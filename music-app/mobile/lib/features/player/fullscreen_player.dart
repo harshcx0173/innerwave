@@ -96,7 +96,6 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
         setState(() {
           final dominant = palette.dominantColor?.color ?? palette.vibrantColor?.color ?? const Color(0xFF1E2638);
           final secondary = palette.darkVibrantColor?.color ?? palette.mutedColor?.color ?? dominant;
-          final accent = palette.lightVibrantColor?.color ?? palette.vibrantColor?.color ?? palette.dominantColor?.color ?? AppTheme.accent;
 
           _dominantColor = _tintColor(dominant, 0.22);
           _secondaryColor = _tintColor(secondary, 0.12);
@@ -109,13 +108,6 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
   Color _tintColor(Color color, double lightness) {
     final hsl = HSLColor.fromColor(color);
     return hsl.withLightness(lightness).withSaturation((hsl.saturation * 1.1).clamp(0.25, 0.85)).toColor();
-  }
-
-  Color _boostColor(Color color) {
-    final hsl = HSLColor.fromColor(color);
-    final l = hsl.lightness < 0.45 ? 0.65 : hsl.lightness;
-    final s = hsl.saturation < 0.5 ? 0.75 : hsl.saturation;
-    return hsl.withLightness(l).withSaturation(s).toColor();
   }
 
   Future<void> _loadLyrics(MediaItem item, PlayerProvider player) async {

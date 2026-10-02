@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart' as ja;
 
@@ -149,6 +150,18 @@ class InnerWaveAudioHandler extends BaseAudioHandler with SeekHandler {
         artUri: artworkUrl != null && artworkUrl.isNotEmpty
             ? Uri.tryParse(artworkUrl)
             : null,
+      ),
+    );
+  }
+
+  void clearMediaItem() {
+    mediaItem.add(null);
+    playbackState.add(
+      PlaybackState(
+        controls: const [],
+        systemActions: const {},
+        processingState: AudioProcessingState.idle,
+        playing: false,
       ),
     );
   }

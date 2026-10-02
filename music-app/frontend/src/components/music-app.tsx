@@ -71,6 +71,7 @@ export function MusicApp() {
   const player = usePlayer();
   const { displayName, user } = useAuth();
   const userNameKey = `${USER_NAME_KEY}:${user?.id || "guest"}`;
+  const historyKey = `innerwave-history:${user?.id || "guest"}`;
   const [feed, setFeed] = useState<Feed>({ shelves: [] });
   const [userName, setUserName] = useState<string | null>(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
@@ -120,7 +121,7 @@ export function MusicApp() {
       setNextPage(home.nextPage ?? 1);
       setHomeContinuation(home.continuation || null);
       setActiveChip("All");
-      const history = JSON.parse(localStorage.getItem("innerwave-history") || "[]") as MediaItem[];
+      const history = JSON.parse(localStorage.getItem(historyKey) || "[]") as MediaItem[];
       const artists = [...new Set(history.flatMap((item) => item.artists).filter(Boolean))].slice(0, 3);
       if (artists.length) {
         musicApi.recommendations(artists).then((personal) => {
@@ -137,7 +138,7 @@ export function MusicApp() {
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load music"); }
     finally { setLoading(false); }
-  }, [userNameKey]);
+  }, [historyKey, userNameKey]);
 
   const loadMore = useCallback(async () => {
     if (view !== "home" || loading || loadingMore || nextPage == null) return;
@@ -215,10 +216,10 @@ export function MusicApp() {
     setCollection(null);
     if (nextView === "home") { loadHome(); return; }
     if (nextView === "explore") { setQuery("Trending music"); search("Trending music"); return; }
-    const history = JSON.parse(localStorage.getItem("innerwave-history") || "[]") as MediaItem[];
+    const history = JSON.parse(localStorage.getItem(historyKey) || "[]") as MediaItem[];
     const shelf: ShelfType = { id: "history", title: "Recently played", layout: "list", items: history };
     setView("library"); setTitle("Your Library"); setSubtitle("Your last 50 plays stay private in this browser."); setFeed({ shelves: history.length ? [shelf] : [] }); setError(null);
-  }, [loadHome, search]);
+  }, [historyKey, loadHome, search]);
 
   const playCollection = useCallback((shuffle = false) => {
     const tracks = feed.shelves.flatMap((shelf) => shelf.items).filter((item) => item.videoId);

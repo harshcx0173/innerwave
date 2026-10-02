@@ -77,7 +77,12 @@ export function QueuePanel() {
 
   useEffect(() => {
     if (activeTab !== "lyrics" || activeLyricIndex < 0) return;
-    lyricsPanelRef.current?.querySelector(`[data-lyric-index="${activeLyricIndex}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const panel = lyricsPanelRef.current;
+    const line = panel?.querySelector<HTMLElement>(`[data-lyric-index="${activeLyricIndex}"]`);
+    if (!panel || !line) return;
+    const top = panel.scrollTop + line.getBoundingClientRect().top - panel.getBoundingClientRect().top
+      - panel.clientHeight / 2 + line.clientHeight / 2;
+    panel.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
   }, [activeLyricIndex, activeTab]);
 
   if (!player.queueOpen && !player.fullscreenOpen) return null;

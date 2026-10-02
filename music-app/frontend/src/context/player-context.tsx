@@ -13,6 +13,7 @@ import {
 import { musicApi } from "@/lib/api";
 import type { MediaItem } from "@/lib/types";
 import { YoutubeTransport, type YoutubeTransportHandle } from "@/components/youtube-transport";
+import { useAuth } from "@/context/auth-context";
 
 export type PlayerSnapshot = {
   current: MediaItem | null;
@@ -78,14 +79,18 @@ type PersistedPlayer = {
 const STORAGE_KEY = "innertube-player-session-v2";
 const PlayerContext = createContext<PlayerContextValue | null>(null);
 
-function remember(item: MediaItem) {
-  const history = JSON.parse(localStorage.getItem("innerwave-history") || "[]") as MediaItem[];
+function remember(item: MediaItem, userId: string) {
+  const historyKey = `innerwave-history:${userId}`;
+  const history = JSON.parse(localStorage.getItem(historyKey) || "[]") as MediaItem[];
   const next = [item, ...history.filter((entry) => entry.id !== item.id)].slice(0, 50);
-  localStorage.setItem("innerwave-history", JSON.stringify(next));
+  localStorage.setItem(historyKey, JSON.stringify(next));
   window.dispatchEvent(new Event("innerwave-history"));
 }
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  const userId = user!.id;
+  const storageKey = `${STORAGE_KEY}:${userId}`;
   const transport = useRef<YoutubeTransportHandle>(null);
   const continuationLoading = useRef(false);
   const restored = useRef(false);
@@ -113,9 +118,26 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [queue]);
 
   useEffect(() => {
+    restored.current = false;
+    transport.current?.stop();
+    localPlaybackEnabledRef.current = true;
+    commandInterceptorRef.current = null;
+    resumeTime.current = 0;
+    autoplayOnLoad.current = false;
+    queueRef.current = [];
+    seenIdsRef.current = new Set();
     const timer = window.setTimeout(() => {
+      setCurrent(null);
+      setQueue([]);
+      setQueueIndex(0);
+      setQueueContinuation(null);
+      setIsPlaying(false);
+      setCurrentTime(0);
+      setDuration(0);
+      setBuffered(0);
+      setError(null);
       try {
-        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null") as PersistedPlayer | null;
+        const saved = JSON.parse(localStorage.getItem(storageKey) || "null") as PersistedPlayer | null;
         if (saved?.current?.videoId) {
           resumeTime.current = Math.max(0, Number(saved.currentTime) || 0);
           setCurrent(saved.current);
@@ -133,13 +155,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           setIsPlaying(false);
         }
       } catch {
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(storageKey);
       } finally {
         restored.current = true;
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
     if (!restored.current) return;
@@ -154,10 +176,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         queueContinuation,
         seenIds: [...seenIdsRef.current].slice(-1000),
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+      localStorage.setItem(storageKey, JSON.stringify(snapshot));
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [current, currentTime, isPlaying, queue, queueContinuation, queueIndex, volume]);
+  }, [current, currentTime, isPlaying, queue, queueContinuation, queueIndex, storageKey, volume]);
 
   const playLocal = useCallback((item: MediaItem, context: MediaItem[] = []) => {
     if (!item.videoId) return;
@@ -176,8 +198,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setCurrent(item);
     setIsPlaying(true);
     setError(null);
-    remember(item);
-  }, []);
+    remember(item, userId);
+  }, [userId]);
 
   const nextLocal = useCallback(() => {
     setQueueIndex((index) => {
@@ -192,13 +214,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         autoplayOnLoad.current = true;
         setCurrent(item);
         setIsPlaying(true);
-        remember(item);
+        remember(item, userId);
         return nextIndex;
       }
       setIsPlaying(false);
       return index;
     });
-  }, [queue]);
+  }, [queue, userId]);
 
   const previousLocal = useCallback(() => {
     if (currentTime > 4) {
@@ -218,11 +240,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         autoplayOnLoad.current = true;
         setCurrent(item);
         setIsPlaying(true);
-        remember(item);
+        remember(item, userId);
       }
       return previousIndex;
     });
-  }, [currentTime, queue]);
+  }, [currentTime, queue, userId]);
 
   const seekLocal = useCallback((time: number) => {
     setError(null);
@@ -413,6 +435,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       <YoutubeTransport
         ref={transport}
         onTime={(time, nextDuration, nextBuffered) => {
+          if (!localPlaybackEnabledRef.current) return;
           setCurrentTime(time);
           setDuration(nextDuration);
           setBuffered(nextBuffered);

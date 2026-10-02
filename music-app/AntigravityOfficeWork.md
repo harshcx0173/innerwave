@@ -217,4 +217,106 @@ We brought the mobile app's queue management system to **100% feature parity wit
 - [`music-app/PROJECT_STATUS.md`](file:///d:/Learn/InnerTube/music-app/PROJECT_STATUS.md)
 - [`music-app/AntigravityOfficeWork.md`](file:///d:/Learn/InnerTube/music-app/AntigravityOfficeWork.md)
 
+---
+
+## 6. Work Item 6: Persistent Background Playback & Doze Mode Termination Fix
+
+### A. User Prompt:
+> *"Bhai mobile app mein still issue hai ki kuch time baad background playback bandh hoo jata hai too woh please fix karo"*
+
+### B. Root Causes Identified:
+1. **`androidStopForegroundOnPause: true` in `AudioServiceConfig`**:
+   Whenever a track was paused, buffered, or transitioning to the next track, `audio_service` dropped the service from Foreground to normal Background. On Android (especially Samsung One UI), background services without an active foreground notification are terminated within 1–2 minutes.
+2. **Missing Android 13+ Notification Permission (`POST_NOTIFICATIONS`)**:
+   Targeting SDK 33+ requires `POST_NOTIFICATIONS`. Without it declared in `AndroidManifest.xml` and requested at runtime, Android 13+ blocks or restricts foreground service notifications, which causes Android OS to kill or throttle the background playback service.
+3. **Missing Network & Battery Exemption Permissions in Manifest**:
+   Lacked `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, and `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`. When phones enter deep sleep / Doze mode, background Wi-Fi access was throttled.
+4. **Abrupt `_audioPlayer.stop()` During Track Transitions**:
+   When changing songs or reaching track end, `_loadAndPlayStream` called `await _audioPlayer.stop()`, causing `_audioPlayer` to emit `idle` and `playing: false`. In background/lock screen, this signaled the OS that playback ceased, allowing Android to freeze network sockets while fetching the next YouTube stream manifest.
+5. **Inactive `AudioSession` & Missing Audio Focus Handlers**:
+   `AudioSession.instance.setActive(true)` was never invoked, meaning Android's `AudioManager` never formally granted ongoing audio focus. Becoming noisy (headphone disconnection) and audio interruptions were unhandled.
+6. **Continuation Queue Starvation**:
+   `next()` terminated playback immediately if `_queueIndex + 1 >= _queue.length`, even when a pagination token (`_queueContinuation`) was present.
+
+### C. Technical Implementation & Fixes:
+1. **Configured Continuous Foreground Service**:
+   - In `mobile/lib/main.dart`, set `androidStopForegroundOnPause: false` so `AudioService` permanently retains foreground service status throughout pauses and song changes.
+   - Added automatic runtime notification permission check via `permission_handler`.
+2. **Hardened Android Manifest**:
+   - Added permissions in `mobile/android/app/src/main/AndroidManifest.xml`:
+     - `android.permission.ACCESS_NETWORK_STATE`
+     - `android.permission.ACCESS_WIFI_STATE`
+     - `android.permission.POST_NOTIFICATIONS`
+     - `android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+   - Configured `android:stopWithTask="false"` on `com.ryanheise.audioservice.AudioService` so switching apps or clearing recent tasks does not instantly kill the audio engine.
+3. **Activated Audio Session & Interruptions**:
+   - In `PlayerProvider._initAudioSession`, called `await session.setActive(true)`.
+   - Wired `interruptionEventStream` for automatic ducking on notifications and pausing on system interruptions.
+   - Wired `becomingNoisyEventStream` for gentle pause on headphone/Bluetooth disconnect.
+4. **Resilient Background Stream Loading & Retries**:
+   - In `PlayerProvider._loadAndPlayStream`, eliminated destructive `_audioPlayer.stop()` calls before manifest fetching.
+   - Set `_lastProcessingState = ja.ProcessingState.loading` and broadcasted active loading state to `audioHandler` to keep the foreground service and MediaSession active.
+   - Added a 3-attempt retry loop with exponential backoff for `_youtube.videos.streams.getManifest` to survive transient lock-screen network reconnects.
+5. **Seamless Queue Continuation in Background**:
+   - Updated `next()` to automatically invoke `loadMoreQueue()` if the end of the loaded queue is reached while a continuation token exists.
+
+### D. Files Modified:
+- [`mobile/android/app/src/main/AndroidManifest.xml`](file:///d:/Learn/InnerTube/music-app/mobile/android/app/src/main/AndroidManifest.xml) (added permissions & configured `stopWithTask="false"`)
+- [`mobile/pubspec.yaml`](file:///d:/Learn/InnerTube/music-app/mobile/pubspec.yaml) (added `permission_handler: ^11.3.1`)
+- [`mobile/lib/main.dart`](file:///d:/Learn/InnerTube/music-app/mobile/lib/main.dart) (`androidStopForegroundOnPause: false`, requested notification permission)
+- [`mobile/lib/core/audio/player_provider.dart`](file:///d:/Learn/InnerTube/music-app/mobile/lib/core/audio/player_provider.dart) (session activation, interruptions, loading states, retry loop, queue continuation)
+- [`mobile/lib/features/player/fullscreen_player.dart`](file:///d:/Learn/InnerTube/music-app/mobile/lib/features/player/fullscreen_player.dart) (cleaned up unused local variables)
+- [`InnerWave-streaming-queue-debug.apk`](file:///d:/Learn/InnerTube/music-app/InnerWave-streaming-queue-debug.apk) (updated test APK)
+
+### E. Verification:
+- `flutter test test/queue_policy_test.dart`: 2/2 tests passed (exit code 0).
+- `flutter analyze`: 0 errors.
+- `flutter build apk --debug`: Compiled successfully in 45.2s with exit code 0.
+- Streaming transport integrity preserved without modifications. No files deleted. No code pushed. No mobile run executed.
+
+---
+
+## 7. Work Item 7: Device Runtime Bug Fixes (Supabase Deep-Link Route Crash & Keyboard Overflow)
+
+### A. User Prompt & Runtime Device Logs:
+> User ran `flutter run` on Samsung Galaxy S24 (`SM S931B`) and provided console log stream exhibiting:
+> 1. `EXCEPTION CAUGHT BY WIDGETS LIBRARY: Could not find a generator for route RouteSettings("/?code=793e6f08-8484-45ae-9c28-8451477fd8ef", null) in the _WidgetsAppState.`
+> 2. `EXCEPTION CAUGHT BY RENDERING LIBRARY: A RenderFlex overflowed by 11 pixels on the bottom (user_onboarding_dialog.dart:109:18).`
+
+### B. Root Causes Identified:
+1. **Unregistered Deep-Link Callback Route**:
+   - When Google OAuth / Supabase redirects back to `com.innerwave.mobile://login-callback/?code=...`, Android dispatches an intent to `MainActivity`.
+   - Flutter's `WidgetsBindingObserver.didPushRouteInformation` attempts to push `/?code=...` as a named route on `MaterialApp`.
+   - Because `MaterialApp` only declared `home: const AuthGate(...)` without an `onGenerateRoute` fallback, Flutter invoked `_onUnknownRoute` and threw an unhandled routing exception.
+2. **Keyboard Height Layout Overflow in Dialog**:
+   - The Samsung software keyboard (`honeyboard`) expanded to a height of 1084 pixels (`ime:[0,0,0,1084]`).
+   - The onboarding welcome card was rendered in a unscrollable `Column(mainAxisSize: MainAxisSize.min)`.
+   - The available vertical screen space shrank from 2340px to ~1100px, causing the dialog to overflow by 11 pixels and triggering a layout exception.
+
+### C. Technical Implementation & Fixes:
+1. **Wildcard Route Generator for Deep Links**:
+   - In [`mobile/lib/main.dart`](file:///d:/Learn/InnerTube/music-app/mobile/lib/main.dart), added `onGenerateRoute` to `MaterialApp`:
+     ```dart
+     onGenerateRoute: (settings) => MaterialPageRoute(
+       builder: (_) => const AuthGate(child: MainNavigationShell()),
+       settings: settings,
+     ),
+     ```
+   - All OAuth redirects, token query params, and deep-link schemes (`/?code=...`, `/login-callback`) are now routed safely to `AuthGate` without crashing.
+2. **Scroll-Safe Onboarding Dialog**:
+   - In [`mobile/lib/core/widgets/user_onboarding_dialog.dart`](file:///d:/Learn/InnerTube/music-app/mobile/lib/core/widgets/user_onboarding_dialog.dart), wrapped the inner `Column` inside a `SingleChildScrollView`.
+   - When the soft keyboard opens on any phone display, the dialog content scrolls smoothly and never clips or throws `RenderFlex` overflow errors.
+
+### D. Files Modified:
+- [`mobile/lib/main.dart`](file:///d:/Learn/InnerTube/music-app/mobile/lib/main.dart) (added `onGenerateRoute` fallback)
+- [`mobile/lib/core/widgets/user_onboarding_dialog.dart`](file:///d:/Learn/InnerTube/music-app/mobile/lib/core/widgets/user_onboarding_dialog.dart) (wrapped dialog card in `SingleChildScrollView`)
+- [`InnerWave-streaming-queue-debug.apk`](file:///d:/Learn/InnerTube/music-app/InnerWave-streaming-queue-debug.apk) (updated test APK)
+- [`AntigravityOfficeWork.md`](file:///d:/Learn/InnerTube/music-app/AntigravityOfficeWork.md)
+- [`PROJECT_STATUS.md`](file:///d:/Learn/InnerTube/music-app/PROJECT_STATUS.md)
+
+### E. Verification:
+- `flutter test test/queue_policy_test.dart`: 2/2 tests passed (exit code 0).
+- `flutter build apk --debug`: Compiled successfully in 34.8s with exit code 0.
+- Fresh binary updated at `music-app/InnerWave-streaming-queue-debug.apk`.
+- Zero files deleted, zero code pushed, client-side streaming transport completely intact.
 

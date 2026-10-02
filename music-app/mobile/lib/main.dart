@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:permission_handler/permission_handler.dart';
+
 import 'core/api/music_api.dart';
 import 'core/auth/auth_controller.dart';
 import 'core/auth/auth_screen.dart';
@@ -33,9 +35,18 @@ Future<void> main() async {
       androidNotificationChannelName: 'InnerWave Music Playback',
       androidNotificationIcon: 'mipmap/ic_launcher',
       androidShowNotificationBadge: true,
-      androidStopForegroundOnPause: true,
+      androidStopForegroundOnPause: false,
     ),
   );
+
+  unawaited(() async {
+    try {
+      final status = await Permission.notification.status;
+      if (!status.isGranted) {
+        await Permission.notification.request();
+      }
+    } catch (_) {}
+  }());
 
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
@@ -77,6 +88,10 @@ class InnerWaveApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: AppTheme.darkTheme,
         home: const AuthGate(child: MainNavigationShell()),
+        onGenerateRoute: (settings) => MaterialPageRoute(
+          builder: (_) => const AuthGate(child: MainNavigationShell()),
+          settings: settings,
+        ),
       ),
     );
   }

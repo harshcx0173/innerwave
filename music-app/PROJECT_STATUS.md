@@ -597,3 +597,30 @@ Deployment note: Render must receive the updated backend before production web/m
 - Required Supabase URL Configuration is now exact rather than broad: production callback, localhost callback, and the mobile deep link.
 - Full timestamped diagnosis, evidence, changes, and remaining dashboard step are documented in `codexWork.md`.
 - Production check on 2026-09-30 found `profiles` and `playback_sessions` returning `404 PGRST205`; `supabase/migrations/001_auth_and_connect.sql` still needs to be run once in the production Supabase SQL Editor before Connect can work.
+
+---
+
+## 18. Persistent Background Playback & Doze Mode Termination Fix (2026-10-01)
+
+- **Root Causes**:
+  - `androidStopForegroundOnPause: true` in `AudioServiceConfig` stripped foreground status during buffering/track transitions, causing Android (especially Samsung One UI) to terminate the app within 1-2 minutes.
+  - Lacked Android 13+ runtime `POST_NOTIFICATIONS` declaration and request, which suppressed foreground service media notifications.
+  - Lacked Android `WIFI_STATE`, `NETWORK_STATE`, and `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permissions.
+  - Calling `_audioPlayer.stop()` during track transitions signaled that playback ceased, allowing Android Doze mode to suspend network sockets during stream resolution.
+  - Audio focus and audio interruption events were unhandled.
+  - Queues stopped abruptly when reaching the end of the loaded batch instead of fetching continuation.
+- **Implemented Fixes**:
+  - Set `androidStopForegroundOnPause: false` in `mobile/lib/main.dart` to maintain continuous foreground service status.
+  - Added runtime notification permission checks using `permission_handler`.
+  - Added `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `POST_NOTIFICATIONS`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, and `android:stopWithTask="false"` in `AndroidManifest.xml`.
+  - Activated `AudioSession` with `session.setActive(true)` and wired audio focus interruption/noisy streams.
+  - Made `_loadAndPlayStream` broadcast active loading state without destructive stops, and added a 3-attempt exponential backoff retry loop for YouTube stream manifests.
+  - Added automatic continuation fetching in `next()` when reaching the end of the loaded queue.
+  - Added `onGenerateRoute` handler in `MaterialApp` to handle Supabase Google auth deep links (`/?code=...`) without unhandled route generator exceptions.
+  - Wrapped `UserOnboardingDialog` in `SingleChildScrollView` to prevent keyboard layout overflow (`RenderFlex` overflow).
+- **Verification**:
+  - `flutter test test/queue_policy_test.dart`: 2/2 tests passed.
+  - `flutter analyze`: 0 errors.
+  - `flutter build apk --debug`: Compiled successfully into `music-app/InnerWave-streaming-queue-debug.apk`.
+
+

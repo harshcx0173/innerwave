@@ -14,7 +14,11 @@ class PlaybackDevice {
   final String name;
   final String platform;
 
-  const PlaybackDevice({required this.id, required this.name, required this.platform});
+  const PlaybackDevice({
+    required this.id,
+    required this.name,
+    required this.platform,
+  });
 }
 
 class PlaybackSyncController extends ChangeNotifier {
@@ -24,12 +28,14 @@ class PlaybackSyncController extends ChangeNotifier {
   RealtimeChannel? _channel;
   Timer? _broadcastTimer;
   Timer? _persistTimer;
+  Timer? _presenceReclaimTimer;
   String? _userId;
   String? _deviceId;
   String? _activeDeviceId;
   int _revision = 0;
   bool _connected = false;
   bool _disposed = false;
+  int _reconnectGeneration = 0;
   List<PlaybackDevice> _devices = const [];
 
   List<PlaybackDevice> get devices => _devices;
@@ -44,25 +50,40 @@ class PlaybackSyncController extends ChangeNotifier {
     final nextUserId = auth.user?.id;
     if (nextUserId == _userId) return;
     _userId = nextUserId;
-    unawaited(_reconnect());
+    final generation = ++_reconnectGeneration;
+    unawaited(_reconnect(generation));
   }
 
-  Future<void> _reconnect() async {
+  Future<void> _reconnect(int generation) async {
     await _disconnect();
+    if (generation != _reconnectGeneration || _disposed) return;
     final auth = _auth;
     final player = _player;
     final user = auth?.user;
-    if (auth == null || player == null || user == null) return;
+    if (auth == null || player == null) return;
+    await player.setSessionOwner(user?.id);
+    if (generation != _reconnectGeneration || _disposed) return;
+    if (user == null) return;
 
     final prefs = await SharedPreferences.getInstance();
     _deviceId = prefs.getString('innerwave_device_id');
     if (_deviceId == null) {
-      _deviceId = '${DateTime.now().millisecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
+      _deviceId =
+          '${DateTime.now().millisecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
       await prefs.setString('innerwave_device_id', _deviceId!);
     }
     final deviceId = _deviceId!;
-    final platform = Platform.isAndroid ? 'Android' : Platform.isIOS ? 'iOS' : Platform.operatingSystem;
-    final device = {'id': deviceId, 'name': 'Mobile • $platform', 'platform': platform, 'onlineAt': DateTime.now().toUtc().toIso8601String()};
+    final platform = Platform.isAndroid
+        ? 'Android'
+        : Platform.isIOS
+        ? 'iOS'
+        : Platform.operatingSystem;
+    final device = {
+      'id': deviceId,
+      'name': 'Mobile • $platform',
+      'platform': platform,
+      'onlineAt': DateTime.now().toUtc().toIso8601String(),
+    };
     final topic = 'innerwave:${user.id}:playback';
     final channel = _client.channel(
       topic,
@@ -72,34 +93,65 @@ class PlaybackSyncController extends ChangeNotifier {
 
     channel
         .onPresenceSync((_) => _syncPresence(channel))
-        .onBroadcast(event: 'command', callback: (raw) => unawaited(_receiveCommand(_payload(raw))))
-        .onBroadcast(event: 'state', callback: (raw) => unawaited(_receiveState(_payload(raw), transfer: false)))
-        .onBroadcast(event: 'active_device', callback: (raw) => unawaited(_receiveState(_payload(raw), transfer: true)));
+        .onBroadcast(
+          event: 'command',
+          callback: (raw) => unawaited(_receiveCommand(_payload(raw))),
+        )
+        .onBroadcast(
+          event: 'state',
+          callback: (raw) =>
+              unawaited(_receiveState(_payload(raw), transfer: false)),
+        )
+        .onBroadcast(
+          event: 'active_device',
+          callback: (raw) =>
+              unawaited(_receiveState(_payload(raw), transfer: true)),
+        );
 
-    final row = await _client
-        .from('playback_sessions')
-        .select('active_device_id,state,revision')
-        .eq('user_id', user.id)
-        .maybeSingle();
+    Map<String, dynamic>? row;
+    try {
+      row = await _client
+          .from('playback_sessions')
+          .select('active_device_id,state,revision')
+          .eq('user_id', user.id)
+          .maybeSingle();
+    } catch (error) {
+      debugPrint(
+        '[PlaybackSyncController] durable session unavailable; '
+        'continuing with local playback: $error',
+      );
+    }
     if (_channel != channel || _disposed) return;
-    _activeDeviceId = row?['active_device_id'] as String? ?? deviceId;
+    _activeDeviceId = row?['active_device_id'] as String?;
     _revision = ((row?['revision'] as num?) ?? 0).toInt();
     final state = row?['state'];
     if (state is Map && state.isNotEmpty) {
       await player.applyRemoteSnapshot(
         Map<String, dynamic>.from(state),
-        playLocally: _activeDeviceId == deviceId,
+        playLocally: _activeDeviceId == null || _activeDeviceId == deviceId,
       );
     } else {
-      player.setLocalPlaybackEnabled(_activeDeviceId == deviceId);
+      player.setLocalPlaybackEnabled(
+        _activeDeviceId == null || _activeDeviceId == deviceId,
+      );
     }
 
     player.setCommandInterceptor((command) {
       final target = _activeDeviceId;
       if (target == null || target == deviceId) return false;
-      unawaited(channel.sendBroadcastMessage(event: 'command', payload: {'payload': {
-        'id': _newId(), 'origin': deviceId, 'target': target, 'command': command,
-      }}));
+      unawaited(
+        channel.sendBroadcastMessage(
+          event: 'command',
+          payload: {
+            'payload': {
+              'id': _newId(),
+              'origin': deviceId,
+              'target': target,
+              'command': command,
+            },
+          },
+        ),
+      );
       return true;
     });
 
@@ -108,12 +160,17 @@ class PlaybackSyncController extends ChangeNotifier {
       _notify();
       if (_connected) {
         await channel.track(device);
-        if (row?['active_device_id'] == null) await activateDevice(deviceId);
       }
     });
 
-    _broadcastTimer = Timer.periodic(const Duration(seconds: 1), (_) => unawaited(_sendState(false)));
-    _persistTimer = Timer.periodic(const Duration(seconds: 5), (_) => unawaited(_sendState(true)));
+    _broadcastTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => unawaited(_sendState(false)),
+    );
+    _persistTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => unawaited(_sendState(true)),
+    );
     _notify();
   }
 
@@ -138,25 +195,54 @@ class PlaybackSyncController extends ChangeNotifier {
     }
     _devices = unique.values.toList();
     _notify();
+    _presenceReclaimTimer?.cancel();
+    final ownId = _deviceId;
+    final activeId = _activeDeviceId;
+    if (ownId != null &&
+        unique.containsKey(ownId) &&
+        (activeId == null || !unique.containsKey(activeId))) {
+      _presenceReclaimTimer = Timer(const Duration(milliseconds: 800), () {
+        final onlineIds = _devices.map((device) => device.id).toList()..sort();
+        final elected = onlineIds.isEmpty ? null : onlineIds.first;
+        final latestActive = _activeDeviceId;
+        if (elected == ownId &&
+            (latestActive == null || !onlineIds.contains(latestActive))) {
+          unawaited(activateDevice(ownId));
+        }
+      });
+    }
   }
 
   Future<void> _receiveCommand(Map<String, dynamic> payload) async {
     final player = _player;
-    if (player == null || payload['origin'] == _deviceId || payload['target'] != _deviceId || !isActiveDevice) return;
+    if (player == null ||
+        payload['origin'] == _deviceId ||
+        payload['target'] != _deviceId ||
+        !isActiveDevice) {
+      return;
+    }
     final command = payload['command'];
     if (command is! Map) return;
     await player.applyRemoteCommand(Map<String, dynamic>.from(command));
     await _sendState(true);
   }
 
-  Future<void> _receiveState(Map<String, dynamic> payload, {required bool transfer}) async {
+  Future<void> _receiveState(
+    Map<String, dynamic> payload, {
+    required bool transfer,
+  }) async {
     if (payload['origin'] == _deviceId) return;
+    final payloadActiveId = payload['activeDeviceId'] as String?;
+    if (!transfer) {
+      if (payload['origin'] != payloadActiveId) return;
+      if (_activeDeviceId != null && payloadActiveId != _activeDeviceId) return;
+    }
     final revision = ((payload['revision'] as num?) ?? 0).toInt();
-    if (revision < _revision) return;
+    if (revision <= _revision) return;
     final snapshot = payload['snapshot'];
     if (snapshot is! Map) return;
     _revision = revision;
-    _activeDeviceId = payload['activeDeviceId'] as String?;
+    _activeDeviceId = payloadActiveId;
     await _player?.applyRemoteSnapshot(
       Map<String, dynamic>.from(snapshot),
       playLocally: transfer && _activeDeviceId == _deviceId,
@@ -169,11 +255,25 @@ class PlaybackSyncController extends ChangeNotifier {
     final user = _auth?.user;
     final channel = _channel;
     final deviceId = _deviceId;
-    if (player == null || user == null || channel == null || deviceId == null || !isActiveDevice) return;
+    if (player == null ||
+        user == null ||
+        channel == null ||
+        deviceId == null ||
+        !isActiveDevice) {
+      return;
+    }
     final snapshot = player.createSyncSnapshot();
     final revision = ++_revision;
-    final payload = {'origin': deviceId, 'activeDeviceId': deviceId, 'snapshot': snapshot, 'revision': revision};
-    await channel.sendBroadcastMessage(event: 'state', payload: {'payload': payload});
+    final payload = {
+      'origin': deviceId,
+      'activeDeviceId': deviceId,
+      'snapshot': snapshot,
+      'revision': revision,
+    };
+    await channel.sendBroadcastMessage(
+      event: 'state',
+      payload: {'payload': payload},
+    );
     if (persist) {
       await _client.from('playback_sessions').upsert({
         'user_id': user.id,
@@ -190,7 +290,9 @@ class PlaybackSyncController extends ChangeNotifier {
     final user = _auth?.user;
     final channel = _channel;
     final deviceId = _deviceId;
-    if (player == null || user == null || channel == null || deviceId == null) return;
+    if (player == null || user == null || channel == null || deviceId == null) {
+      return;
+    }
     final snapshot = player.createSyncSnapshot();
     final revision = ++_revision;
     _activeDeviceId = targetId;
@@ -206,31 +308,48 @@ class PlaybackSyncController extends ChangeNotifier {
       'revision': revision,
       'updated_at': DateTime.now().toUtc().toIso8601String(),
     });
-    await channel.sendBroadcastMessage(event: 'active_device', payload: {'payload': {
-      'origin': deviceId, 'activeDeviceId': targetId, 'snapshot': snapshot, 'revision': revision,
-    }});
+    await channel.sendBroadcastMessage(
+      event: 'active_device',
+      payload: {
+        'payload': {
+          'origin': deviceId,
+          'activeDeviceId': targetId,
+          'snapshot': snapshot,
+          'revision': revision,
+        },
+      },
+    );
     _notify();
   }
 
   Future<void> _disconnect() async {
     _broadcastTimer?.cancel();
     _persistTimer?.cancel();
+    _presenceReclaimTimer?.cancel();
     _broadcastTimer = null;
     _persistTimer = null;
+    _presenceReclaimTimer = null;
     _player?.setCommandInterceptor(null);
     final channel = _channel;
     _channel = null;
     if (channel != null) await _client.removeChannel(channel);
     _connected = false;
     _devices = const [];
+    _activeDeviceId = null;
+    _revision = 0;
+    _player?.setLocalPlaybackEnabled(true);
   }
 
-  String _newId() => '${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(1 << 30)}';
-  void _notify() { if (!_disposed) notifyListeners(); }
+  String _newId() =>
+      '${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(1 << 30)}';
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
 
   @override
   void dispose() {
     _disposed = true;
+    ++_reconnectGeneration;
     unawaited(_disconnect());
     super.dispose();
   }

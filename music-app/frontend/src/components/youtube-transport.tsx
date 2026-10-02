@@ -24,7 +24,7 @@ type YoutubeNamespace = {
       height: string;
       playerVars: Record<string, string | number>;
       events: {
-        onReady: () => void;
+        onReady: (event: { target: YoutubePlayer }) => void;
         onStateChange: (event: { data: number }) => void;
         onError: (event: { data: number }) => void;
       };
@@ -80,7 +80,10 @@ export const YoutubeTransport = forwardRef<YoutubeTransportHandle, YoutubeTransp
   function YoutubeTransport({ onTime, onPlayingChange, onEnded, onError }, ref) {
     const hostRef = useRef<HTMLDivElement>(null);
     const playerRef = useRef<YoutubePlayer | null>(null);
+    const readyRef = useRef(false);
     const pendingRef = useRef<{ videoId: string; startSeconds: number; autoplay: boolean } | null>(null);
+    const pendingSeekRef = useRef<number | null>(null);
+    const desiredPlaybackRef = useRef<"play" | "pause" | "stop" | null>(null);
     const desiredVolumeRef = useRef(0.8);
     const callbacksRef = useRef({ onTime, onPlayingChange, onEnded, onError });
     callbacksRef.current = { onTime, onPlayingChange, onEnded, onError };
@@ -88,34 +91,61 @@ export const YoutubeTransport = forwardRef<YoutubeTransportHandle, YoutubeTransp
     const loadPending = () => {
       const player = playerRef.current;
       const pending = pendingRef.current;
-      if (!player || !pending) return;
+      if (!readyRef.current || !player || !pending) return;
       const options = { videoId: pending.videoId, startSeconds: pending.startSeconds };
-      if (pending.autoplay) player.loadVideoById(options);
-      else player.cueVideoById(options);
+      if (pending.autoplay && typeof player.loadVideoById === "function") player.loadVideoById(options);
+      else if (typeof player.cueVideoById === "function") player.cueVideoById(options);
       pendingRef.current = null;
     };
 
     useImperativeHandle(ref, () => ({
       load(videoId, startSeconds, autoplay) {
         pendingRef.current = { videoId, startSeconds, autoplay };
+        pendingSeekRef.current = null;
+        desiredPlaybackRef.current = autoplay ? "play" : "pause";
         loadPending();
       },
-      play: () => playerRef.current?.playVideo(),
-      pause: () => playerRef.current?.pauseVideo(),
-      stop: () => playerRef.current?.stopVideo(),
-      seek: (seconds) => playerRef.current?.seekTo(seconds, true),
+      play() {
+        desiredPlaybackRef.current = "play";
+        const player = playerRef.current;
+        if (readyRef.current && typeof player?.playVideo === "function") player.playVideo();
+      },
+      pause() {
+        desiredPlaybackRef.current = "pause";
+        const player = playerRef.current;
+        if (readyRef.current && typeof player?.pauseVideo === "function") player.pauseVideo();
+      },
+      stop() {
+        pendingRef.current = null;
+        pendingSeekRef.current = null;
+        desiredPlaybackRef.current = "stop";
+        const player = playerRef.current;
+        if (readyRef.current && typeof player?.stopVideo === "function") player.stopVideo();
+      },
+      seek(seconds) {
+        pendingSeekRef.current = seconds;
+        const player = playerRef.current;
+        if (readyRef.current && typeof player?.seekTo === "function") {
+          player.seekTo(seconds, true);
+          pendingSeekRef.current = null;
+        }
+      },
       setVolume(volume) {
         desiredVolumeRef.current = volume;
-        playerRef.current?.setVolume(Math.round(volume * 100));
+        const player = playerRef.current;
+        if (readyRef.current && typeof player?.setVolume === "function") {
+          player.setVolume(Math.round(volume * 100));
+        }
       },
     }));
 
     useEffect(() => {
       let disposed = false;
       let timer = 0;
+      let createdPlayer: YoutubePlayer | null = null;
       loadYoutubeApi().then((YT) => {
         if (disposed || !hostRef.current) return;
-        playerRef.current = new YT.Player(hostRef.current, {
+        createdPlayer = new YT.Player(hostRef.current, {
           width: "200",
           height: "200",
           playerVars: {
@@ -127,17 +157,34 @@ export const YoutubeTransport = forwardRef<YoutubeTransportHandle, YoutubeTransp
             origin: window.location.origin,
           },
           events: {
-            onReady: () => {
-              playerRef.current?.setVolume(Math.round(desiredVolumeRef.current * 100));
+            onReady: ({ target }) => {
+              if (disposed) {
+                if (typeof target.destroy === "function") target.destroy();
+                return;
+              }
+              playerRef.current = target;
+              readyRef.current = true;
+              if (typeof target.setVolume === "function") {
+                target.setVolume(Math.round(desiredVolumeRef.current * 100));
+              }
               loadPending();
+              if (pendingSeekRef.current != null && typeof target.seekTo === "function") {
+                target.seekTo(pendingSeekRef.current, true);
+                pendingSeekRef.current = null;
+              }
+              if (desiredPlaybackRef.current === "play" && typeof target.playVideo === "function") target.playVideo();
+              else if (desiredPlaybackRef.current === "pause" && typeof target.pauseVideo === "function") target.pauseVideo();
+              else if (desiredPlaybackRef.current === "stop" && typeof target.stopVideo === "function") target.stopVideo();
               timer = window.setInterval(() => {
                 const player = playerRef.current;
-                if (!player) return;
-                const duration = player.getDuration() || 0;
+                if (!readyRef.current || !player) return;
+                const duration = typeof player.getDuration === "function" ? player.getDuration() || 0 : 0;
+                const currentTime = typeof player.getCurrentTime === "function" ? player.getCurrentTime() || 0 : 0;
+                const loadedFraction = typeof player.getVideoLoadedFraction === "function" ? player.getVideoLoadedFraction() || 0 : 0;
                 callbacksRef.current.onTime(
-                  player.getCurrentTime() || 0,
+                  currentTime,
                   duration,
-                  duration * (player.getVideoLoadedFraction() || 0),
+                  duration * loadedFraction,
                 );
               }, 500);
             },
@@ -152,7 +199,8 @@ export const YoutubeTransport = forwardRef<YoutubeTransportHandle, YoutubeTransp
       return () => {
         disposed = true;
         if (timer) window.clearInterval(timer);
-        playerRef.current?.destroy();
+        readyRef.current = false;
+        if (createdPlayer && typeof createdPlayer.destroy === "function") createdPlayer.destroy();
         playerRef.current = null;
       };
     }, []);
