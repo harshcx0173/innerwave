@@ -130,6 +130,17 @@ def admin_overview(authorization: str | None = Header(default=None)) -> dict:
     for row in presence:
         if isinstance(row, dict) and row.get("user_id"):
             presence_by_user.setdefault(str(row["user_id"]), []).append(row)
+    profile_ids = {str(profile.get("id")) for profile in profiles}
+    for user_id, rows in presence_by_user.items():
+        if user_id in profile_ids or not rows:
+            continue
+        latest = rows[0]
+        profiles.append({
+            "id": user_id,
+            "display_name": latest.get("display_name") or "InnerWave Listener",
+            "avatar_url": None,
+            "created_at": latest.get("last_seen"),
+        })
     users = []
     active_users = 0
     active_listeners = 0

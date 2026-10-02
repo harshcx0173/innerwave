@@ -410,7 +410,7 @@ class PlaybackSyncController extends ChangeNotifier {
         ? player.api.baseUrl.substring(0, player.api.baseUrl.length - 1)
         : player.api.baseUrl;
     try {
-      await http
+      final response = await http
           .post(
             Uri.parse('$base/api/presence'),
             headers: {
@@ -446,8 +446,15 @@ class PlaybackSyncController extends ChangeNotifier {
             }),
           )
           .timeout(const Duration(seconds: 12));
-    } catch (_) {
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        debugPrint(
+          '[PlaybackSyncController] presence failed '
+          '(${response.statusCode}): ${response.body}',
+        );
+      }
+    } catch (error) {
       // Presence analytics must never interrupt music playback.
+      debugPrint('[PlaybackSyncController] presence unavailable: $error');
     }
   }
 

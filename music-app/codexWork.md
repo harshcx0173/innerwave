@@ -686,3 +686,38 @@ The Supabase CLI is not installed and no Supabase management access token/databa
 - Generated `mobile/build` (1282.8 MB), `frontend/.next` (204.7 MB), and Python bytecode cache were removed after verification. D drive free space recovered to 46.82 GB.
 - Five-hour Codex usage checkpoint after implementation: 6% used / 94% remaining, above the requested 30% remaining stop threshold.
 - No Git commit or push was performed for the admin-panel changes.
+
+## Admin missing mobile users/location repair — 2026-10-02 18:25:05 +05:30
+
+### User report
+
+- A newly created mobile user did not appear in `/musicadmin` after refresh.
+- The user was also absent from `public.profiles` in Supabase.
+- Mobile GPS/location was not visible in the admin dashboard.
+
+### Root cause and resilience gaps
+
+1. The admin overview used `profiles` as its only base user list. If the Auth-to-profile trigger was missing or had not run, both that user and an otherwise valid `user_presence` row were hidden.
+2. The production database needs an explicit trigger repair/backfill because an Auth user already exists without a profile row.
+3. The installed phone build could still be the pre-location APK; native permission/plugin changes only take effect after rebuilding and reinstalling.
+4. Mobile presence requests ignored non-2xx responses, making missing migration/RLS/deployment failures invisible in device logs.
+
+### Implemented repair
+
+- Added `supabase/migrations/003_repair_profiles_presence.sql`:
+  - recreates the `on_auth_user_created` trigger;
+  - backfills every existing `auth.users` row into `public.profiles`;
+  - updates existing profile metadata safely;
+  - adds owner insert policy as a resilience fallback;
+  - is idempotent and safe to rerun.
+- Updated `backend/app/main.py` so presence-only users are merged into the admin list even if a profile row is temporarily missing.
+- Updated mobile `PlaybackSyncController` to log presence HTTP failures and response bodies without interrupting music playback.
+
+### Verification and device delivery
+
+- Backend compile/import passed.
+- Flutter focused analyzer passed with zero issues.
+- Flutter tests passed: 3/3.
+- Latest debug APK built successfully and installed on connected Samsung `SM-S931B`.
+- App data was cleared during the approved reinstall, so the mobile app requires sign-in again and will request location permission on the first authenticated session.
+- Production still requires running migration `003_repair_profiles_presence.sql` and redeploying the backend repair before the dashboard can reflect the fix.
