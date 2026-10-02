@@ -36,6 +36,7 @@ class PlaybackSyncController extends ChangeNotifier {
   StreamSubscription<Position>? _positionSubscription;
   Position? _position;
   String _locationPermission = 'unavailable';
+  bool _locationRefreshInFlight = false;
   String? _userId;
   String? _deviceId;
   String? _activeDeviceId;
@@ -361,36 +362,68 @@ class PlaybackSyncController extends ChangeNotifier {
   }
 
   Future<void> _startPresenceReporting() async {
+    await _refreshLocationTracking(requestPermission: true);
+    await _sendPresence();
+    _presenceTimer?.cancel();
+    _presenceTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      await _refreshLocationTracking();
+      await _sendPresence();
+    });
+  }
+
+  Future<void> _refreshLocationTracking({
+    bool requestPermission = false,
+  }) async {
+    if (_locationRefreshInFlight || _disposed || _auth?.user == null) return;
+    _locationRefreshInFlight = true;
     try {
       var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
+      if (requestPermission && permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
         _locationPermission = 'denied';
-      } else if (await Geolocator.isLocationServiceEnabled()) {
-        _locationPermission = 'granted';
-        _positionSubscription =
-            Geolocator.getPositionStream(
-              locationSettings: const LocationSettings(
-                accuracy: LocationAccuracy.high,
-                distanceFilter: 50,
-              ),
-            ).listen((position) {
+        _position = null;
+        await _positionSubscription?.cancel();
+        _positionSubscription = null;
+        return;
+      }
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _locationPermission = 'unavailable';
+        _position = null;
+        await _positionSubscription?.cancel();
+        _positionSubscription = null;
+        return;
+      }
+      _locationPermission = 'granted';
+      _positionSubscription ??=
+          Geolocator.getPositionStream(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              distanceFilter: 50,
+            ),
+          ).listen(
+            (position) {
               _position = position;
               unawaited(_sendPresence());
-            });
-      }
-    } catch (_) {
+            },
+            onError: (Object error) {
+              _locationPermission = 'unavailable';
+              _position = null;
+              final subscription = _positionSubscription;
+              _positionSubscription = null;
+              if (subscription != null) unawaited(subscription.cancel());
+              unawaited(_sendPresence());
+            },
+          );
+    } catch (error) {
       _locationPermission = 'unavailable';
+      _position = null;
+      debugPrint('[PlaybackSyncController] location unavailable: $error');
+    } finally {
+      _locationRefreshInFlight = false;
     }
-    await _sendPresence();
-    _presenceTimer?.cancel();
-    _presenceTimer = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => unawaited(_sendPresence()),
-    );
   }
 
   Future<void> _sendPresence() async {

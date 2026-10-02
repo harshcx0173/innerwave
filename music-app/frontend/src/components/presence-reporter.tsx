@@ -41,22 +41,30 @@ export function PresenceReporter() {
     };
 
     let watchId: number | null = null;
-    if ("geolocation" in navigator) {
+    const startLocationWatch = () => {
+      if (!("geolocation" in navigator) || watchId != null || cancelled) return;
       watchId = navigator.geolocation.watchPosition(
         (position) => {
           locationRef.current = { permission: "granted", latitude: position.coords.latitude, longitude: position.coords.longitude, accuracyMeters: position.coords.accuracy };
           void report(locationRef.current);
         },
         (error) => {
+          if (watchId != null) navigator.geolocation.clearWatch(watchId);
+          watchId = null;
           locationRef.current = { permission: error.code === error.PERMISSION_DENIED ? "denied" : "unavailable" };
           void report(locationRef.current);
         },
         { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 },
       );
-    } else {
+    };
+    if ("geolocation" in navigator) startLocationWatch();
+    else {
       void report();
     }
-    const timer = window.setInterval(() => void report(), 30000);
+    const timer = window.setInterval(() => {
+      startLocationWatch();
+      void report();
+    }, 30000);
     void report();
     return () => {
       cancelled = true;

@@ -721,3 +721,21 @@ The Supabase CLI is not installed and no Supabase management access token/databa
 - Latest debug APK built successfully and installed on connected Samsung `SM-S931B`.
 - App data was cleared during the approved reinstall, so the mobile app requires sign-in again and will request location permission on the first authenticated session.
 - Production still requires running migration `003_repair_profiles_presence.sql` and redeploying the backend repair before the dashboard can reflect the fix.
+
+## Mobile presence RLS diagnosis — 2026-10-02
+
+- The user's attached `flutter run` output confirmed `Geolocator position updates started`, proving the native location plugin and permission path are active.
+- The actual failure was backend HTTP 403 with PostgreSQL code `42501`: `new row violates row-level security policy for table "user_presence"`.
+- PostgREST upsert uses `ON CONFLICT` and needs to inspect the caller's existing row. The schema had owner INSERT/UPDATE policies and admin SELECT, but no owner SELECT policy.
+- Added idempotent migration `004_presence_upsert_policy.sql`, granting authenticated users SELECT access only to their own presence rows. Admin-only cross-user visibility remains unchanged.
+- Production recovery order is now: run `003_repair_profiles_presence.sql` for profiles/trigger/backfill, then run `004_presence_upsert_policy.sql` for presence heartbeat upserts.
+
+## Location permission re-enable recovery — 2026-10-02
+
+- The user requested that a listener who previously denied location should automatically return to GPS display in `/musicadmin` after re-enabling permission.
+- Web `PresenceReporter` now restarts its geolocation watcher during the 30-second heartbeat whenever the previous watcher ended through denial, timeout, or unavailability.
+- Mobile `PlaybackSyncController` now rechecks both OS permission and the device location-service state every 30 seconds.
+- When permission/service becomes available again, the mobile position stream restarts automatically and immediately sends fresh coordinates.
+- When permission is revoked or location services are disabled, stale coordinates are cleared and the next heartbeat falls back to server-captured IP.
+- Backend upsert overwrites the same user/device row, so the admin panel changes from IP fallback back to GPS without logout/relogin.
+- Frontend ESLint and production build passed. Flutter focused analyzer passed with zero issues and Flutter tests passed 3/3.
