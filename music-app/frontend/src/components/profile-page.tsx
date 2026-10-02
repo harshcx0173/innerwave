@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, CheckCircle2, LogOut, Mail, Save, ShieldCheck, UserRound } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useAuth } from "@/context/auth-context";
 
 function initials(name: string) {
@@ -18,8 +18,6 @@ export function ProfilePage({ onBack }: { onBack: () => void }) {
     const value = auth.user?.app_metadata?.provider;
     return typeof value === "string" ? value : "email";
   }, [auth.user?.app_metadata?.provider]);
-
-  useEffect(() => setName(auth.displayName), [auth.displayName]);
 
   async function save(event: FormEvent) {
     event.preventDefault();

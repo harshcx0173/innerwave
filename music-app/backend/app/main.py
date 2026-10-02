@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import re
+import json
+import os
 import unicodedata
+from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
+from urllib.request import Request as UrlRequest, urlopen
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
@@ -20,6 +25,144 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://gbqmtmcjqdqgfkzuwqot.supabase.co").rstrip("/")
+SUPABASE_PUBLISHABLE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable__Vqh6AU8KimNPSNGeX_tFA_4ieBRkqS")
+ADMIN_EMAIL = os.getenv("INNERWAVE_ADMIN_EMAIL", "harsh.b.mevada@gmail.com").strip().lower()
+
+
+def _bearer_token(authorization: str | None) -> str:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return authorization.split(" ", 1)[1].strip()
+
+
+def _supabase_json(path: str, token: str, *, method: str = "GET", payload: object | None = None, headers: dict[str, str] | None = None) -> object:
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = UrlRequest(
+        f"{SUPABASE_URL}{path}",
+        data=body,
+        method=method,
+        headers={
+            "apikey": SUPABASE_PUBLISHABLE_KEY,
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            **(headers or {}),
+        },
+    )
+    try:
+        with urlopen(request, timeout=12) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else {}
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(status_code=exc.code, detail=f"Supabase request failed: {detail[:300]}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise HTTPException(status_code=503, detail="Account service is temporarily unavailable") from exc
+
+
+def _authenticated_user(authorization: str | None) -> tuple[str, dict]:
+    token = _bearer_token(authorization)
+    user = _supabase_json("/auth/v1/user", token)
+    if not isinstance(user, dict) or not user.get("id"):
+        raise HTTPException(status_code=401, detail="Invalid session")
+    return token, user
+
+
+def _client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    candidate = forwarded.split(",", 1)[0].strip() if forwarded else (request.client.host if request.client else "")
+    return candidate or None
+
+
+@app.post("/api/presence")
+async def update_presence(request: Request, authorization: str | None = Header(default=None)) -> dict[str, bool]:
+    token, user = _authenticated_user(authorization)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Invalid presence payload")
+    metadata = user.get("user_metadata") if isinstance(user.get("user_metadata"), dict) else {}
+    permission = str(payload.get("locationPermission") or "unavailable")[:24]
+    latitude = payload.get("latitude") if permission == "granted" else None
+    longitude = payload.get("longitude") if permission == "granted" else None
+    accuracy = payload.get("accuracyMeters") if permission == "granted" else None
+    current_track = payload.get("currentTrack")
+    device_id = str(payload.get("deviceId") or "")[:120]
+    if not device_id:
+        raise HTTPException(status_code=422, detail="deviceId is required")
+    row = {
+        "user_id": user["id"],
+        "email": user.get("email"),
+        "display_name": str(metadata.get("display_name") or metadata.get("full_name") or metadata.get("name") or str(user.get("email") or "InnerWave Listener").split("@")[0])[:80],
+        "platform": str(payload.get("platform") or "Unknown")[:40],
+        "device_id": device_id,
+        "is_listening": bool(payload.get("isListening")),
+        "current_track": current_track if isinstance(current_track, dict) else None,
+        "location_permission": permission,
+        "latitude": latitude if isinstance(latitude, (int, float)) and -90 <= latitude <= 90 else None,
+        "longitude": longitude if isinstance(longitude, (int, float)) and -180 <= longitude <= 180 else None,
+        "accuracy_meters": accuracy if isinstance(accuracy, (int, float)) and accuracy >= 0 else None,
+        "ip_address": _client_ip(request),
+        "last_seen": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _supabase_json(
+        "/rest/v1/user_presence?on_conflict=user_id,device_id",
+        token,
+        method="POST",
+        payload=row,
+        headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+    )
+    return {"ok": True}
+
+
+@app.get("/api/admin/overview")
+def admin_overview(authorization: str | None = Header(default=None)) -> dict:
+    token, user = _authenticated_user(authorization)
+    if str(user.get("email") or "").lower() != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    profiles = _supabase_json("/rest/v1/profiles?select=id,display_name,avatar_url,created_at&order=created_at.desc", token)
+    presence = _supabase_json("/rest/v1/user_presence?select=*&order=last_seen.desc", token)
+    profiles = profiles if isinstance(profiles, list) else []
+    presence = presence if isinstance(presence, list) else []
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=90)
+    presence_by_user: dict[str, list[dict]] = {}
+    for row in presence:
+        if isinstance(row, dict) and row.get("user_id"):
+            presence_by_user.setdefault(str(row["user_id"]), []).append(row)
+    users = []
+    active_users = 0
+    active_listeners = 0
+    for profile in profiles:
+        rows = presence_by_user.get(str(profile.get("id")), [])
+        active_rows = []
+        for candidate in rows:
+            try:
+                seen = datetime.fromisoformat(str(candidate.get("last_seen") or "").replace("Z", "+00:00"))
+                if seen >= cutoff:
+                    active_rows.append(candidate)
+            except ValueError:
+                continue
+        active = bool(active_rows)
+        listening_rows = [candidate for candidate in active_rows if candidate.get("is_listening") is True]
+        row = (listening_rows or active_rows or rows or [{}])[0]
+        gps_rows = [candidate for candidate in active_rows or rows if candidate.get("location_permission") == "granted" and candidate.get("latitude") is not None and candidate.get("longitude") is not None]
+        if gps_rows:
+            location_row = gps_rows[0]
+            row = {**row, "location_permission": "granted", "latitude": location_row.get("latitude"), "longitude": location_row.get("longitude"), "accuracy_meters": location_row.get("accuracy_meters"), "ip_address": location_row.get("ip_address")}
+        listening = bool(listening_rows)
+        active_users += int(active)
+        active_listeners += int(listening)
+        has_gps = row.get("location_permission") == "granted" and row.get("latitude") is not None and row.get("longitude") is not None
+        users.append({
+            **profile,
+            **row,
+            "active": active,
+            "is_listening": listening,
+            "location_source": "gps" if has_gps else ("ip" if row.get("ip_address") else "unavailable"),
+            "ip_address": None if has_gps else row.get("ip_address"),
+        })
+    return {"totalUsers": len(profiles), "activeUsers": active_users, "activeListeners": active_listeners, "users": users, "generatedAt": datetime.now(timezone.utc).isoformat()}
 
 
 def upstream_error(exc: Exception) -> HTTPException:

@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -29,6 +32,10 @@ class PlaybackSyncController extends ChangeNotifier {
   Timer? _broadcastTimer;
   Timer? _persistTimer;
   Timer? _presenceReclaimTimer;
+  Timer? _presenceTimer;
+  StreamSubscription<Position>? _positionSubscription;
+  Position? _position;
+  String _locationPermission = 'unavailable';
   String? _userId;
   String? _deviceId;
   String? _activeDeviceId;
@@ -90,6 +97,7 @@ class PlaybackSyncController extends ChangeNotifier {
       opts: RealtimeChannelConfig(private: true, key: deviceId, enabled: true),
     );
     _channel = channel;
+    unawaited(_startPresenceReporting());
 
     channel
         .onPresenceSync((_) => _syncPresence(channel))
@@ -326,9 +334,15 @@ class PlaybackSyncController extends ChangeNotifier {
     _broadcastTimer?.cancel();
     _persistTimer?.cancel();
     _presenceReclaimTimer?.cancel();
+    _presenceTimer?.cancel();
+    await _positionSubscription?.cancel();
     _broadcastTimer = null;
     _persistTimer = null;
     _presenceReclaimTimer = null;
+    _presenceTimer = null;
+    _positionSubscription = null;
+    _position = null;
+    _locationPermission = 'unavailable';
     _player?.setCommandInterceptor(null);
     final channel = _channel;
     _channel = null;
@@ -344,6 +358,97 @@ class PlaybackSyncController extends ChangeNotifier {
       '${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(1 << 30)}';
   void _notify() {
     if (!_disposed) notifyListeners();
+  }
+
+  Future<void> _startPresenceReporting() async {
+    try {
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        _locationPermission = 'denied';
+      } else if (await Geolocator.isLocationServiceEnabled()) {
+        _locationPermission = 'granted';
+        _positionSubscription =
+            Geolocator.getPositionStream(
+              locationSettings: const LocationSettings(
+                accuracy: LocationAccuracy.high,
+                distanceFilter: 50,
+              ),
+            ).listen((position) {
+              _position = position;
+              unawaited(_sendPresence());
+            });
+      }
+    } catch (_) {
+      _locationPermission = 'unavailable';
+    }
+    await _sendPresence();
+    _presenceTimer?.cancel();
+    _presenceTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => unawaited(_sendPresence()),
+    );
+  }
+
+  Future<void> _sendPresence() async {
+    final auth = _auth;
+    final player = _player;
+    final token = auth?.session?.accessToken;
+    final deviceId = _deviceId;
+    if (auth?.user == null ||
+        player == null ||
+        token == null ||
+        deviceId == null) {
+      return;
+    }
+    final position = _position;
+    final current = player.current;
+    final base = player.api.baseUrl.endsWith('/')
+        ? player.api.baseUrl.substring(0, player.api.baseUrl.length - 1)
+        : player.api.baseUrl;
+    try {
+      await http
+          .post(
+            Uri.parse('$base/api/presence'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({
+              'platform': Platform.isAndroid
+                  ? 'Android'
+                  : Platform.isIOS
+                  ? 'iOS'
+                  : Platform.operatingSystem,
+              'deviceId': deviceId,
+              'isListening': player.isPlaying && current != null,
+              'currentTrack': current == null
+                  ? null
+                  : {
+                      'id': current.id,
+                      'title': current.title,
+                      'artists': current.artists,
+                      'thumbnail': current.highResThumbnail,
+                    },
+              'locationPermission': _locationPermission,
+              'latitude': _locationPermission == 'granted'
+                  ? position?.latitude
+                  : null,
+              'longitude': _locationPermission == 'granted'
+                  ? position?.longitude
+                  : null,
+              'accuracyMeters': _locationPermission == 'granted'
+                  ? position?.accuracy
+                  : null,
+            }),
+          )
+          .timeout(const Duration(seconds: 12));
+    } catch (_) {
+      // Presence analytics must never interrupt music playback.
+    }
   }
 
   @override

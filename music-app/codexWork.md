@@ -627,3 +627,62 @@ The Supabase CLI is not installed and no Supabase management access token/databa
 - `frontend/.next` was left in place because the user's dev server is currently running and actively uses it.
 - Final primary usage checkpoint: `77% used / 23% remaining`; the new 10% stop threshold was not reached.
 - No commit was created and nothing was pushed to GitHub.
+
+## Web admin analytics, live presence and location fallback — 2026-10-02 17:44:13 +05:30
+
+### Conversation and decisions
+
+- The user requested a web-only admin panel showing total users, currently active users, active listeners, per-user playback, and each user's location.
+- Exact device/browser location is the first choice. When the user denies location or location is unavailable, the backend-captured request IP is the fallback shown to the administrator.
+- Denying location does **not** remove the user from the music app; the latest decision replaced forced exit with IP fallback.
+- The requested admin route is `/musicadmin`.
+- The supplied administrator email is used as the sole allow-listed admin identity. The supplied password is intentionally **not** written to source code, documentation, environment templates, or Git; Supabase Auth stores and validates it.
+- The user clarified that the safety stop threshold applies to the five-hour Codex window: stop when 30% remains.
+
+### Implemented architecture
+
+- `supabase/migrations/002_admin_presence.sql`
+  - Adds `public.user_presence` with one row per user/device, listening state, track metadata, location permission, GPS coordinates/accuracy, request IP and heartbeat timestamps.
+  - Adds owner-only insert/update RLS and admin-email-only select RLS.
+  - Adds an admin select policy for `public.profiles`, allowing an exact registered-user count without exposing user data to normal listeners.
+- `backend/app/main.py`
+  - Adds authenticated `POST /api/presence`.
+  - Verifies the Supabase bearer session against `/auth/v1/user`; it never trusts a client-provided user ID or email.
+  - Captures the request IP server-side and writes presence through the caller's JWT/RLS permissions.
+  - Adds admin-only `GET /api/admin/overview`, verifies the allow-listed admin email again, aggregates multi-device rows per user, and defines active as a heartbeat within 90 seconds.
+  - GPS is returned as the preferred source. Raw IP is returned to the admin response only when GPS is not available.
+- `frontend/src/components/presence-reporter.tsx`
+  - Requests browser geolocation, tracks changes, and sends authenticated presence every 30 seconds.
+  - Reports current track/listening state; denied/unavailable location naturally uses backend IP fallback.
+- `frontend/src/app/musicadmin/page.tsx` and `frontend/src/components/admin-dashboard.tsx`
+  - Adds the protected `/musicadmin` route with an admin-specific login.
+  - Prefills only the admin email; the password field is always blank and never embedded.
+  - Shows total users, active users, active listeners, available locations, user/device status, current track, GPS accuracy/map links or IP fallback, and last-active time.
+  - Refreshes live data every 15 seconds.
+- `mobile/lib/core/sync/playback_sync_controller.dart`
+  - Adds foreground location permission/reporting and a 30-second authenticated presence heartbeat.
+  - Current track and listening state are included without interrupting playback if analytics fails.
+- Mobile platform configuration
+  - Adds `geolocator`, Android coarse/fine location permissions, and the iOS when-in-use purpose description.
+
+### Configuration and deployment required
+
+1. Run `supabase/migrations/002_admin_presence.sql` once in the production Supabase SQL Editor.
+2. Redeploy Render so the new presence/admin endpoints are live. Optional environment overrides are documented in `backend/.env.example`.
+3. Set `NEXT_PUBLIC_ADMIN_EMAIL=harsh.b.mevada@gmail.com` in Vercel (the same safe default exists in code) and redeploy the frontend.
+4. Ensure the administrator account exists in Supabase Auth with the requested email and a private password. No password is present in the repository.
+5. Rebuild/reinstall the Flutter app so the new native location permissions and geolocation plugin are included.
+
+### Verification status at documentation time
+
+- Backend Python compilation passed.
+- Frontend production build passed and generated `/musicadmin` successfully.
+- Mobile focused analyzer passed with zero issues.
+- Flutter tests passed: 3/3.
+- Frontend lint initially found two React effect-state findings; fixes were applied and the final rerun is recorded below after completion.
+- Final frontend ESLint rerun passed with zero errors.
+- Final Next.js production build passed TypeScript/static generation and included `/musicadmin`.
+- Backend imported successfully in the project virtualenv; `/api/presence` and `/api/admin/overview` were confirmed in the FastAPI route table.
+- Generated `mobile/build` (1282.8 MB), `frontend/.next` (204.7 MB), and Python bytecode cache were removed after verification. D drive free space recovered to 46.82 GB.
+- Five-hour Codex usage checkpoint after implementation: 6% used / 94% remaining, above the requested 30% remaining stop threshold.
+- No Git commit or push was performed for the admin-panel changes.
