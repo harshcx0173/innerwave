@@ -15,9 +15,9 @@ import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
 import { MediaArt } from "./media-art";
 import { TasteBuilder } from "./taste-builder";
-import { UserModal } from "./user-modal";
+import { ProfilePage } from "./profile-page";
 
-type View = "home" | "explore" | "library";
+type View = "home" | "explore" | "library" | "profile";
 
 function orderHomeShelves(shelves: ShelfType[]) {
   const rank = (shelf: ShelfType) => {
@@ -65,17 +65,11 @@ function useArtworkColor(url: string | null | undefined, seed: string) {
   return url && sample?.url === url ? sample.color : colorFromText(seed);
 }
 
-const USER_NAME_KEY = "innerwave-user-name";
-
 export function MusicApp() {
   const player = usePlayer();
   const { displayName, user } = useAuth();
-  const userNameKey = `${USER_NAME_KEY}:${user?.id || "guest"}`;
   const historyKey = `innerwave-history:${user?.id || "guest"}`;
   const [feed, setFeed] = useState<Feed>({ shelves: [] });
-  const [userName, setUserName] = useState<string | null>(null);
-  const [profileModalOpen, setProfileModalOpen] = useState(false);
-  const [onboardingRequired, setOnboardingRequired] = useState(false);
   const [title, setTitle] = useState("Made for your day");
   const [subtitle, setSubtitle] = useState("A living mix of fresh finds, familiar favorites and everything between.");
   const [view, setView] = useState<View>("home");
@@ -92,27 +86,14 @@ export function MusicApp() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      const saved = localStorage.getItem(userNameKey);
-      const resolved = saved?.trim() || displayName;
-      setUserName(resolved);
-      setTitle(`Made for ${resolved}`);
-      setOnboardingRequired(false);
+      setTitle(`Made for ${displayName}`);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [displayName, userNameKey]);
-
-  const handleNameComplete = useCallback((name: string) => {
-    localStorage.setItem(userNameKey, name);
-    setUserName(name);
-    setOnboardingRequired(false);
-    setProfileModalOpen(false);
-    setTitle(`Made for ${name}`);
-  }, [userNameKey]);
+  }, [displayName]);
 
   const loadHome = useCallback(async () => {
     setLoading(true); setError(null); setView("home");
-    const currentName = localStorage.getItem(userNameKey);
-    setTitle(currentName ? `Made for ${currentName}` : "Made for your day");
+    setTitle(`Made for ${displayName}`);
     setCollection(null);
     setSubtitle("A living mix of fresh finds, familiar favorites and everything between.");
     try {
@@ -138,7 +119,7 @@ export function MusicApp() {
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load music"); }
     finally { setLoading(false); }
-  }, [historyKey, userNameKey]);
+  }, [displayName, historyKey]);
 
   const loadMore = useCallback(async () => {
     if (view !== "home" || loading || loadingMore || nextPage == null) return;
@@ -278,26 +259,21 @@ export function MusicApp() {
           query={query}
           setQuery={setQuery}
           onSearch={search}
-          userName={userName}
-          onOpenProfile={() => setProfileModalOpen(true)}
+          userName={displayName}
+          onOpenProfile={() => setView("profile")}
         />
         <div className="page-content">
+          {view === "profile" ? <ProfilePage onBack={() => setView("home")} /> : <>
           {collection ? <section className="collection-header"><MediaArt item={collection} className="collection-art" /><div><span>{collection.type.toUpperCase()}</span><h1>{collection.title}</h1><p>{collection.subtitle}</p><div className="collection-actions"><button onClick={() => playCollection(false)}><Play fill="currentColor" />Play all</button><button onClick={() => playCollection(true)}><Shuffle />Shuffle</button></div></div></section> : view !== "home" ? <section className="home-heading"><h1>{title}</h1><p>{subtitle}</p></section> : null}
           {view === "home" && <div className="mood-chips">{["All", ...(feed.chips || ["Relax", "Energize", "Workout", "Commute", "Focus"])].map((chip) => <button key={chip} className={activeChip === chip ? "active" : ""} onClick={() => chooseChip(chip)}>{chip}</button>)}</div>}
           {loading ? <div className="state"><LoaderCircle className="spin" /><p>Loading music…</p></div> : error ? <div className="state error"><p>{error}</p><button onClick={loadHome}><RefreshCw size={15} />Try again</button></div> : feed.shelves.length ? feed.shelves.map((shelf) => <Fragment key={shelf.id}><Shelf shelf={shelf} onSelect={selectItem} onPlayAll={playContainer} />{shelf.id === "discover-1" && <TasteBuilder items={shelf.items} onExplore={() => search("Top artists")} />}</Fragment>) : <div className="state"><p>No playable results found yet.</p></div>}
           {view === "home" && <div ref={loadMoreRef} className="load-more-sentinel">{loadingMore ? <><LoaderCircle className="spin" /> Loading more</> : nextPage == null ? "You’re all caught up" : ""}</div>}
+          </>}
         </div>
       </main>
       <QueuePanel />
       <FullscreenPlayer />
       <PlayerBar />
-      <UserModal
-        isOpen={profileModalOpen || onboardingRequired}
-        onComplete={handleNameComplete}
-        initialName={userName || ""}
-        isClosable={!onboardingRequired}
-        onClose={() => setProfileModalOpen(false)}
-      />
     </div>
   );
 }

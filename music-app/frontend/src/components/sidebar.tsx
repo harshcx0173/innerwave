@@ -2,9 +2,9 @@
 
 import { Compass, Disc3, Headphones, Heart, Home, Library, Plus, Radio, Search } from "lucide-react";
 
-type View = "home" | "explore" | "library";
+type View = "home" | "explore" | "library" | "profile";
 
-export function Sidebar({ active, onNavigate }: { active: View; onNavigate: (view: View) => void }) {
+export function Sidebar({ active, onNavigate }: { active: View; onNavigate: (view: "home" | "explore" | "library") => void }) {
   const links = [
     { id: "home" as const, label: "Home", icon: Home },
     { id: "explore" as const, label: "Explore", icon: Compass },

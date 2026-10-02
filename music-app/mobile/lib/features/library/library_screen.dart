@@ -1,12 +1,15 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../core/audio/player_provider.dart';
+import '../../core/auth/auth_controller.dart';
 import '../../core/models/media_model.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/media_art.dart';
-import '../../core/widgets/user_onboarding_dialog.dart';
+import '../profile/profile_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -17,7 +20,6 @@ class LibraryScreen extends StatefulWidget {
 
 class _LibraryScreenState extends State<LibraryScreen> {
   List<MediaItem> _history = [];
-  String _userName = '';
   String _selectedFilter = 'All'; // 'All', 'Liked Songs', 'Recently Played'
 
   @override
@@ -28,7 +30,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
-    final name = prefs.getString('innerwave_user_name') ?? '';
     final historyJson = prefs.getString('innerwave_mobile_history');
     List<MediaItem> items = [];
     if (historyJson != null) {
@@ -40,7 +41,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
     if (mounted) {
       setState(() {
-        _userName = name;
         _history = items;
       });
     }
@@ -55,11 +55,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   Widget build(BuildContext context) {
     final player = context.watch<PlayerProvider>();
+    final userName = context.watch<AuthController>().displayName;
     final likedSongs = player.likedSongs;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Your Library', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22)),
+        title: const Text(
+          'Your Library',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh, color: AppTheme.textSecondary),
@@ -97,8 +101,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   ),
                   child: Center(
                     child: Text(
-                      _userName.isNotEmpty ? _userName.substring(0, _userName.length >= 2 ? 2 : 1).toUpperCase() : 'IW',
-                      style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18),
+                      userName
+                          .substring(0, userName.length >= 2 ? 2 : 1)
+                          .toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.black,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
                     ),
                   ),
                 ),
@@ -108,33 +118,33 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        _userName.isNotEmpty ? _userName : 'InnerWave Listener',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                        userName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
                       ),
                       const SizedBox(height: 3),
                       Text(
                         '${likedSongs.length} Liked · ${_history.length} Recent',
-                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                        style: const TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 12,
+                        ),
                       ),
                     ],
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.edit_outlined, color: AppTheme.accent, size: 20),
-                  onPressed: () async {
-                    final prefs = await SharedPreferences.getInstance();
-                    if (!context.mounted) return;
-                    showDialog(
-                      context: context,
-                      builder: (context) => UserOnboardingDialog(
-                        onComplete: (newName) async {
-                          await prefs.setString('innerwave_user_name', newName);
-                          setState(() => _userName = newName);
-                          if (context.mounted) Navigator.of(context).pop();
-                        },
-                      ),
-                    );
-                  },
+                  icon: const Icon(
+                    Icons.edit_outlined,
+                    color: AppTheme.accent,
+                    size: 20,
+                  ),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                  ),
                 ),
               ],
             ),
@@ -166,12 +176,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
-                  colors: [Color(0xFF3B1E6D), Color(0xFF1E1333), Color(0xFF12141A)],
+                  colors: [
+                    Color(0xFF3B1E6D),
+                    Color(0xFF1E1333),
+                    Color(0xFF12141A),
+                  ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.purpleAccent.withValues(alpha: 0.3)),
+                border: Border.all(
+                  color: Colors.purpleAccent.withValues(alpha: 0.3),
+                ),
               ),
               child: Material(
                 color: Colors.transparent,
@@ -188,20 +204,29 @@ class _LibraryScreenState extends State<LibraryScreen> {
                             height: 56,
                             decoration: BoxDecoration(
                               gradient: const LinearGradient(
-                                colors: [Colors.purpleAccent, Color(0xFFFF2E93)],
+                                colors: [
+                                  Colors.purpleAccent,
+                                  Color(0xFFFF2E93),
+                                ],
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
                               ),
                               borderRadius: BorderRadius.circular(16),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.purpleAccent.withValues(alpha: 0.4),
+                                  color: Colors.purpleAccent.withValues(
+                                    alpha: 0.4,
+                                  ),
                                   blurRadius: 14,
                                   offset: const Offset(0, 4),
                                 ),
                               ],
                             ),
-                            child: const Icon(Icons.favorite_rounded, color: Colors.white, size: 30),
+                            child: const Icon(
+                              Icons.favorite_rounded,
+                              color: Colors.white,
+                              size: 30,
+                            ),
                           ),
                           const SizedBox(width: 16),
                           Expanded(
@@ -210,29 +235,49 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               children: [
                                 const Text(
                                   'Liked Songs',
-                                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
                                   '${likedSongs.length} favorite ${likedSongs.length == 1 ? "track" : "tracks"}',
-                                  style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                                  style: const TextStyle(
+                                    color: AppTheme.textSecondary,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ],
                             ),
                           ),
                           if (likedSongs.isNotEmpty) ...[
                             IconButton.filled(
-                              onPressed: () => player.play(likedSongs.first, likedSongs),
-                              icon: const Icon(Icons.play_arrow_rounded, color: Colors.black, size: 26),
-                              style: IconButton.styleFrom(backgroundColor: AppTheme.accent),
+                              onPressed: () =>
+                                  player.play(likedSongs.first, likedSongs),
+                              icon: const Icon(
+                                Icons.play_arrow_rounded,
+                                color: Colors.black,
+                                size: 26,
+                              ),
+                              style: IconButton.styleFrom(
+                                backgroundColor: AppTheme.accent,
+                              ),
                             ),
                             const SizedBox(width: 6),
                             IconButton(
                               onPressed: () {
-                                final shuffled = List<MediaItem>.from(likedSongs)..shuffle();
+                                final shuffled = List<MediaItem>.from(
+                                  likedSongs,
+                                )..shuffle();
                                 player.play(shuffled.first, shuffled);
                               },
-                              icon: const Icon(Icons.shuffle_rounded, color: Colors.white70, size: 20),
+                              icon: const Icon(
+                                Icons.shuffle_rounded,
+                                color: Colors.white70,
+                                size: 20,
+                              ),
                             ),
                           ],
                         ],
@@ -245,17 +290,34 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ],
 
           // 4. Liked Songs List (When 'Liked Songs' is active or in 'All' if has items)
-          if (_selectedFilter == 'Liked Songs' || (_selectedFilter == 'All' && likedSongs.isNotEmpty)) ...[
+          if (_selectedFilter == 'Liked Songs' ||
+              (_selectedFilter == 'All' && likedSongs.isNotEmpty)) ...[
             Padding(
-              padding: const EdgeInsets.only(left: 20, right: 20, top: 16, bottom: 8),
+              padding: const EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 16,
+                bottom: 8,
+              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text(
                     'YOUR FAVORITES',
-                    style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                    style: TextStyle(
+                      color: AppTheme.textMuted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                    ),
                   ),
-                  Text('${likedSongs.length} total', style: const TextStyle(color: AppTheme.textMuted, fontSize: 11)),
+                  Text(
+                    '${likedSongs.length} total',
+                    style: const TextStyle(
+                      color: AppTheme.textMuted,
+                      fontSize: 11,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -266,7 +328,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   child: Text(
                     'No liked songs yet.\nTap the heart icon on any song to save it here!',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: AppTheme.textMuted, fontSize: 13, height: 1.5),
+                    style: TextStyle(
+                      color: AppTheme.textMuted,
+                      fontSize: 13,
+                      height: 1.5,
+                    ),
                   ),
                 ),
               )
@@ -274,14 +340,27 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ...likedSongs.map((item) {
                 final isCurrent = player.current?.id == item.id;
                 return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 3,
+                  ),
                   child: Material(
-                    color: isCurrent ? AppTheme.accent.withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.02),
+                    color: isCurrent
+                        ? AppTheme.accent.withValues(alpha: 0.1)
+                        : Colors.white.withValues(alpha: 0.02),
                     borderRadius: BorderRadius.circular(12),
                     clipBehavior: Clip.antiAlias,
                     child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-                      leading: MediaArt(item: item, width: 46, height: 46, borderRadius: 8),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 2,
+                      ),
+                      leading: MediaArt(
+                        item: item,
+                        width: 46,
+                        height: 46,
+                        borderRadius: 8,
+                      ),
                       title: Text(
                         item.title,
                         maxLines: 1,
@@ -293,20 +372,31 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         ),
                       ),
                       subtitle: Text(
-                        item.subtitle.isNotEmpty ? item.subtitle : item.artists.join(', '),
+                        item.subtitle.isNotEmpty
+                            ? item.subtitle
+                            : item.artists.join(', '),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                        style: const TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 12,
+                        ),
                       ),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           IconButton(
-                            icon: const Icon(Icons.favorite_rounded, color: Colors.purpleAccent, size: 20),
+                            icon: const Icon(
+                              Icons.favorite_rounded,
+                              color: Colors.purpleAccent,
+                              size: 20,
+                            ),
                             onPressed: () => player.toggleLike(item),
                           ),
                           Icon(
-                            isCurrent && player.isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_arrow_rounded,
+                            isCurrent && player.isPlaying
+                                ? Icons.pause_circle_filled_rounded
+                                : Icons.play_arrow_rounded,
                             color: isCurrent ? AppTheme.accent : Colors.white38,
                             size: 24,
                           ),
@@ -322,18 +412,31 @@ class _LibraryScreenState extends State<LibraryScreen> {
           // 5. Recently Played Section
           if (_selectedFilter != 'Liked Songs') ...[
             Padding(
-              padding: const EdgeInsets.only(left: 20, right: 20, top: 22, bottom: 8),
+              padding: const EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 22,
+                bottom: 8,
+              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text(
                     'RECENTLY PLAYED',
-                    style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                    style: TextStyle(
+                      color: AppTheme.textMuted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                    ),
                   ),
                   if (_history.isNotEmpty)
                     GestureDetector(
                       onTap: _clearHistory,
-                      child: const Text('Clear', style: TextStyle(color: AppTheme.accent, fontSize: 11)),
+                      child: const Text(
+                        'Clear',
+                        style: TextStyle(color: AppTheme.accent, fontSize: 11),
+                      ),
                     ),
                 ],
               ),
@@ -343,7 +446,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 24, vertical: 24),
                 child: Center(
-                  child: Text('Your recently played tracks will appear here.', style: TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+                  child: Text(
+                    'Your recently played tracks will appear here.',
+                    style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
+                  ),
                 ),
               )
             else
@@ -352,14 +458,27 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 final isLiked = player.isLiked(item.id);
 
                 return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 3,
+                  ),
                   child: Material(
-                    color: isCurrent ? AppTheme.accent.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.02),
+                    color: isCurrent
+                        ? AppTheme.accent.withValues(alpha: 0.08)
+                        : Colors.white.withValues(alpha: 0.02),
                     borderRadius: BorderRadius.circular(12),
                     clipBehavior: Clip.antiAlias,
                     child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-                      leading: MediaArt(item: item, width: 44, height: 44, borderRadius: 8),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 2,
+                      ),
+                      leading: MediaArt(
+                        item: item,
+                        width: 44,
+                        height: 44,
+                        borderRadius: 8,
+                      ),
                       title: Text(
                         item.title,
                         maxLines: 1,
@@ -371,24 +490,35 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         ),
                       ),
                       subtitle: Text(
-                        item.subtitle.isNotEmpty ? item.subtitle : item.artists.join(', '),
+                        item.subtitle.isNotEmpty
+                            ? item.subtitle
+                            : item.artists.join(', '),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                        style: const TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 11,
+                        ),
                       ),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           IconButton(
                             icon: Icon(
-                              isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                              color: isLiked ? Colors.purpleAccent : Colors.white24,
+                              isLiked
+                                  ? Icons.favorite_rounded
+                                  : Icons.favorite_border_rounded,
+                              color: isLiked
+                                  ? Colors.purpleAccent
+                                  : Colors.white24,
                               size: 18,
                             ),
                             onPressed: () => player.toggleLike(item),
                           ),
                           Icon(
-                            isCurrent && player.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                            isCurrent && player.isPlaying
+                                ? Icons.pause_rounded
+                                : Icons.play_arrow_rounded,
                             color: isCurrent ? AppTheme.accent : Colors.white30,
                             size: 20,
                           ),

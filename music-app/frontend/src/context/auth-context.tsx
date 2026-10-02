@@ -13,8 +13,13 @@ type AuthContextValue = {
   signIn: (email: string, password: string) => Promise<AuthResult>;
   signUp: (name: string, email: string, password: string) => Promise<AuthResult>;
   resendVerification: (email: string) => Promise<AuthResult>;
+  sendPasswordReset: (email: string) => Promise<AuthResult>;
+  updatePassword: (password: string) => Promise<AuthResult>;
+  updateProfile: (name: string) => Promise<AuthResult>;
   signInWithGoogle: () => Promise<AuthResult>;
   signOut: () => Promise<void>;
+  passwordRecovery: boolean;
+  finishPasswordRecovery: () => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -26,14 +31,17 @@ function authCallbackUrl() {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     supabase.auth.getSession().then(({ data }) => {
       if (mounted) { setSession(data.session); setLoading(false); }
     });
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
+      if (event === "SIGNED_OUT") setPasswordRecovery(false);
       setLoading(false);
     });
     return () => { mounted = false; data.subscription.unsubscribe(); };
@@ -63,11 +71,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     return { error: error?.message ?? null };
   }, []);
+  const sendPasswordReset = useCallback(async (email: string): Promise<AuthResult> => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: authCallbackUrl(),
+    });
+    return { error: error?.message ?? null };
+  }, []);
+  const updatePassword = useCallback(async (password: string): Promise<AuthResult> => {
+    const { error } = await supabase.auth.updateUser({ password });
+    if (!error) setPasswordRecovery(false);
+    return { error: error?.message ?? null };
+  }, []);
+  const updateProfile = useCallback(async (name: string): Promise<AuthResult> => {
+    const { error } = await supabase.auth.updateUser({ data: { display_name: name.trim() } });
+    return { error: error?.message ?? null };
+  }, []);
+  const finishPasswordRecovery = useCallback(() => setPasswordRecovery(false), []);
   const signOut = useCallback(async () => { await supabase.auth.signOut(); }, []);
 
   const user = session?.user ?? null;
   const displayName = String(user?.user_metadata?.display_name || user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "InnerWave Listener");
-  const value = useMemo<AuthContextValue>(() => ({ session, user, loading, displayName, signIn, signUp, resendVerification, signInWithGoogle, signOut }), [displayName, loading, resendVerification, session, signIn, signInWithGoogle, signOut, signUp, user]);
+  const value = useMemo<AuthContextValue>(() => ({ session, user, loading, displayName, signIn, signUp, resendVerification, sendPasswordReset, updatePassword, updateProfile, signInWithGoogle, signOut, passwordRecovery, finishPasswordRecovery }), [displayName, finishPasswordRecovery, loading, passwordRecovery, resendVerification, sendPasswordReset, session, signIn, signInWithGoogle, signOut, signUp, updatePassword, updateProfile, user]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
