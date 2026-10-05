@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config/supabase_config.dart';
+import 'disposable_email_validator.dart';
 
 class AuthController extends ChangeNotifier {
   final SupabaseClient client = Supabase.instance.client;
@@ -40,6 +41,10 @@ class AuthController extends ChangeNotifier {
           .toString();
 
   Future<String?> signIn(String email, String password) async {
+    final check = await validateEmailNotDisposable(email);
+    if (check.isDisposable) {
+      return check.message ?? 'Disposable or temporary email addresses are not allowed.';
+    }
     try {
       await client.auth.signInWithPassword(
         email: email.trim(),
@@ -58,6 +63,13 @@ class AuthController extends ChangeNotifier {
     String email,
     String password,
   ) async {
+    final check = await validateEmailNotDisposable(email);
+    if (check.isDisposable) {
+      return (
+        error: check.message ?? 'Disposable or temporary email addresses are not allowed.',
+        verificationRequired: false,
+      );
+    }
     try {
       final response = await client.auth.signUp(
         email: email.trim(),
@@ -92,6 +104,10 @@ class AuthController extends ChangeNotifier {
   }
 
   Future<String?> resendVerification(String email) async {
+    final check = await validateEmailNotDisposable(email);
+    if (check.isDisposable) {
+      return check.message ?? 'Disposable or temporary email addresses are not allowed.';
+    }
     try {
       await client.auth.resend(
         type: OtpType.signup,
@@ -107,6 +123,10 @@ class AuthController extends ChangeNotifier {
   }
 
   Future<String?> sendPasswordReset(String email) async {
+    final check = await validateEmailNotDisposable(email);
+    if (check.isDisposable) {
+      return check.message ?? 'Disposable or temporary email addresses are not allowed.';
+    }
     try {
       await client.auth.resetPasswordForEmail(
         email.trim(),

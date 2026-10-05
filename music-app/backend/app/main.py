@@ -13,6 +13,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
+from .disposable_email import is_disposable_email, ensure_domains_loaded
 from .parser import parse_chips, parse_feed, parse_lyrics, parse_suggestions, parse_watch_tabs
 from .recommendations import rank_queue, recommendation_queries
 from .service import service
@@ -602,3 +603,19 @@ def stream(video_id: str) -> RedirectResponse:
         raise
     except Exception as exc:
         raise upstream_error(exc) from exc
+
+
+@app.get("/api/auth/validate-email")
+def validate_email_endpoint(email: str = Query(..., description="Email address to validate")) -> dict:
+    ensure_domains_loaded()
+    is_disp, reason = is_disposable_email(email)
+    clean_email = email.strip().lower()
+    domain = clean_email.split("@")[-1].strip() if "@" in clean_email else ""
+    return {
+        "email": clean_email,
+        "domain": domain,
+        "disposable": is_disp,
+        "allowed": not is_disp,
+        "message": reason,
+    }
+

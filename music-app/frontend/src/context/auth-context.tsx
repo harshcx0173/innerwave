@@ -3,6 +3,7 @@
 import type { Session, User } from "@supabase/supabase-js";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
+import { validateEmailNotDisposable } from "@/lib/disposable-email";
 
 type AuthResult = { error: string | null; needsEmailVerification?: boolean };
 type AuthContextValue = {
@@ -48,12 +49,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = useCallback(async (email: string, password: string): Promise<AuthResult> => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const validation = await validateEmailNotDisposable(email);
+    if (!validation.valid) {
+      return { error: validation.error || "Disposable or temporary email addresses are not allowed." };
+    }
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     return { error: error?.message ?? null };
   }, []);
   const signUp = useCallback(async (name: string, email: string, password: string): Promise<AuthResult> => {
+    const validation = await validateEmailNotDisposable(email);
+    if (!validation.valid) {
+      return { error: validation.error || "Disposable or temporary email addresses are not allowed." };
+    }
     const { data, error } = await supabase.auth.signUp({
-      email,
+      email: email.trim(),
       password,
       options: { emailRedirectTo: authCallbackUrl(), data: { display_name: name.trim() } },
     });
@@ -64,6 +73,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error?.message ?? null };
   }, []);
   const resendVerification = useCallback(async (email: string): Promise<AuthResult> => {
+    const validation = await validateEmailNotDisposable(email);
+    if (!validation.valid) {
+      return { error: validation.error || "Disposable or temporary email addresses are not allowed." };
+    }
     const { error } = await supabase.auth.resend({
       type: "signup",
       email: email.trim(),
@@ -72,6 +85,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error?.message ?? null };
   }, []);
   const sendPasswordReset = useCallback(async (email: string): Promise<AuthResult> => {
+    const validation = await validateEmailNotDisposable(email);
+    if (!validation.valid) {
+      return { error: validation.error || "Disposable or temporary email addresses are not allowed." };
+    }
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: authCallbackUrl(),
     });
