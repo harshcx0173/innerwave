@@ -18,6 +18,10 @@ import { TasteBuilder } from "./taste-builder";
 import { ProfilePage } from "./profile-page";
 import { ExplorePage } from "./explore-page";
 import { ListeningRoomPanel } from "./listening-room-panel";
+import { usePlaylist, type UserPlaylist } from "@/context/playlist-context";
+import { AddToPlaylistModal } from "./add-to-playlist-modal";
+import { SongShareModal } from "./song-share-modal";
+import { ArtistView } from "./artist-view";
 
 type View = "home" | "explore" | "library" | "profile";
 
@@ -91,6 +95,7 @@ function useArtworkColor(url: string | null | undefined, seed: string) {
 export function MusicApp() {
   const player = usePlayer();
   const { displayName, user } = useAuth();
+  const { getPlaylistSongs } = usePlaylist();
   const historyKey = `innerwave-history:${user?.id || "guest"}`;
   const [feed, setFeed] = useState<Feed>({ shelves: [] });
   const [title, setTitle] = useState("Made for your day");
@@ -289,6 +294,47 @@ export function MusicApp() {
     setView("library"); setTitle("Your Library"); setSubtitle("Your last 50 plays stay private in this browser."); setFeed({ shelves: history.length ? [shelf] : [] }); setError(null);
   }, [historyKey, loadExplore, loadHome]);
 
+  const openPlaylist = useCallback(async (playlist: UserPlaylist) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const songs = await getPlaylistSongs(playlist.id);
+      const mockCollection: MediaItem = {
+        id: playlist.id,
+        videoId: null,
+        browseId: null,
+        browseParams: null,
+        playlistId: playlist.id,
+        title: playlist.name,
+        subtitle: playlist.description || `${songs.length} tracks • Custom playlist`,
+        artists: [],
+        thumbnail: playlist.coverUrl || (songs[0]?.thumbnail ?? null),
+        type: "playlist",
+        duration: null,
+        watchParams: null,
+        index: null,
+      };
+      setCollection(mockCollection);
+      setTitle(playlist.name);
+      setSubtitle(playlist.description || "Custom Playlist");
+      setFeed({
+        shelves: [
+          {
+            id: `user-playlist-${playlist.id}`,
+            title: "Playlist Songs",
+            layout: "list",
+            items: songs,
+          },
+        ],
+      });
+      setView("library");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load playlist songs");
+    } finally {
+      setLoading(false);
+    }
+  }, [getPlaylistSongs]);
+
   const browseExplore = useCallback((kind: "releases" | "charts" | "moods" | "podcasts") => {
     const seed = exploreSeed || "music";
     const requests = {
@@ -355,7 +401,7 @@ export function MusicApp() {
           onError={(e) => { e.currentTarget.style.display = "none"; }}
         />
       )}
-      <Sidebar active={view} onNavigate={navigate} />
+      <Sidebar active={view} onNavigate={navigate} onSelectPlaylist={openPlaylist} />
       <main className="main-area">
         <Topbar
           query={query}
@@ -377,6 +423,9 @@ export function MusicApp() {
       <FullscreenPlayer />
       <PlayerBar />
       <ListeningRoomPanel />
+      <AddToPlaylistModal />
+      <SongShareModal />
+      <ArtistView />
     </div>
   );
 }

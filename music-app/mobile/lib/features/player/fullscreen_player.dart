@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:palette_generator/palette_generator.dart';
@@ -12,6 +11,9 @@ import '../../core/models/media_model.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/media_art.dart';
 import '../collection/collection_screen.dart';
+import '../playlist/add_to_playlist_sheet.dart';
+import '../explore/artist_profile_screen.dart';
+import 'widgets/song_share_sheet.dart';
 
 class FullscreenPlayerScreen extends StatefulWidget {
   const FullscreenPlayerScreen({super.key});
@@ -1190,6 +1192,32 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
                   },
                 ),
 
+                // 2.5 Audio Quality
+                ListTile(
+                  leading: const Icon(Icons.high_quality_outlined, color: Colors.cyanAccent),
+                  title: Row(
+                    children: [
+                      const Text('Audio Stream Quality', style: TextStyle(color: Colors.white, fontSize: 13)),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppTheme.accent.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          player.audioQuality.toUpperCase(),
+                          style: const TextStyle(color: AppTheme.accent, fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    _showAudioQualityDialog(context, player);
+                  },
+                ),
+
                 // 3. More Like This / Song Radio
                 ListTile(
                   leading: const Icon(Icons.radio_rounded, color: Colors.white70),
@@ -1222,21 +1250,37 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
                     },
                   ),
 
-                // 5. Share
+                // 5. Add to Playlist
                 ListTile(
-                  leading: const Icon(Icons.share_outlined, color: Colors.white70),
-                  title: const Text('Share Track', style: TextStyle(color: Colors.white, fontSize: 13)),
+                  leading: const Icon(Icons.playlist_add, color: AppTheme.accent),
+                  title: const Text('Add to Playlist', style: TextStyle(color: Colors.white, fontSize: 13)),
                   onTap: () {
                     Navigator.of(ctx).pop();
-                    final shareText = 'Listen to "${current.title}" on InnerWave: https://music.youtube.com/watch?v=${current.videoId}';
-                    Clipboard.setData(ClipboardData(text: shareText));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Track link copied to clipboard!'),
-                        backgroundColor: AppTheme.surfaceElevated,
-                        duration: Duration(seconds: 2),
-                      ),
-                    );
+                    AddToPlaylistSheet.show(context, current);
+                  },
+                ),
+
+                // 6. View Artist
+                if (current.artists.isNotEmpty)
+                  ListTile(
+                    leading: const Icon(Icons.person_outline, color: Colors.purpleAccent),
+                    title: Text('View Artist (${current.artists.first})', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => ArtistProfileScreen(artistName: current.artists.first)),
+                      );
+                    },
+                  ),
+
+                // 7. Share Track Poster Card
+                ListTile(
+                  leading: const Icon(Icons.share_outlined, color: Colors.cyanAccent),
+                  title: const Text('Share Track Poster Card', style: TextStyle(color: Colors.white, fontSize: 13)),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    final roomCode = context.read<ListeningRoomController>().room?.code;
+                    SongShareSheet.show(context, current, roomCode);
                   },
                 ),
               ],
@@ -1268,8 +1312,21 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
             _sleepOption(ctx, player, '30 Minutes', const Duration(minutes: 30)),
             _sleepOption(ctx, player, '45 Minutes', const Duration(minutes: 45)),
             _sleepOption(ctx, player, '1 Hour', const Duration(hours: 1)),
-            _sleepOption(ctx, player, 'End of this Track', player.duration - player.position),
-            if (player.hasSleepTimer)
+            ListTile(
+              title: const Text('End of this Track', style: TextStyle(color: Colors.white, fontSize: 13)),
+              onTap: () {
+                player.setSleepAtTrackEnd(true);
+                Navigator.of(ctx).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Playback will stop at the end of this track'),
+                    backgroundColor: AppTheme.surfaceElevated,
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              },
+            ),
+            if (player.hasSleepTimer || player.sleepAtTrackEnd)
               ListTile(
                 title: const Text('Turn Off Timer', style: TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.bold)),
                 onTap: () {
@@ -1291,11 +1348,55 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
         Navigator.of(ctx).pop();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Sleep timer set for $label'),
+            content: Text('Sleep timer set for $label (volume will fade out smoothly)'),
             backgroundColor: AppTheme.surfaceElevated,
             duration: const Duration(seconds: 2),
           ),
         );
+      },
+    );
+  }
+
+  void _showAudioQualityDialog(BuildContext context, PlayerProvider player) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF13171B),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.high_quality, color: AppTheme.accent),
+            SizedBox(width: 8),
+            Text('Audio Stream Quality', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _qualityOption(ctx, player, 'High (HQ 256kbps+)', 'high'),
+            _qualityOption(ctx, player, 'Normal (Balanced 128kbps)', 'normal'),
+            _qualityOption(ctx, player, 'Low (Data Saver 64kbps)', 'low'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _qualityOption(BuildContext ctx, PlayerProvider player, String label, String quality) {
+    final isSelected = player.audioQuality == quality;
+    return ListTile(
+      title: Text(
+        label,
+        style: TextStyle(
+          color: isSelected ? AppTheme.accent : Colors.white,
+          fontSize: 13,
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+      trailing: isSelected ? const Icon(Icons.check, color: AppTheme.accent, size: 18) : null,
+      onTap: () {
+        player.setAudioQuality(quality);
+        Navigator.of(ctx).pop();
       },
     );
   }

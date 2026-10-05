@@ -63,6 +63,20 @@ type PlayerContextValue = {
   applyRemoteCommand: (command: PlayerCommand) => void;
   applyRemoteSnapshot: (snapshot: PlayerSnapshot, playLocally: boolean) => void;
   setLocalPlaybackEnabled: (enabled: boolean) => void;
+  sleepTimerRemaining: number | null;
+  sleepTimerMode: number | "end-of-track" | null;
+  setSleepTimer: (mode: number | "end-of-track") => void;
+  cancelSleepTimer: () => void;
+  crossfade: number;
+  setCrossfade: (seconds: number) => void;
+  audioQuality: "low" | "normal" | "high";
+  setAudioQuality: (quality: "low" | "normal" | "high") => void;
+  selectedArtistForView: string | null;
+  openArtistView: (artistName: string) => void;
+  closeArtistView: () => void;
+  activeShareSong: MediaItem | null;
+  openShareModal: (song: MediaItem) => void;
+  closeShareModal: () => void;
 };
 
 type PersistedPlayer = {
@@ -112,6 +126,127 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [buffered, setBuffered] = useState(0);
   const [volume, setVolumeState] = useState(0.8);
   const [error, setError] = useState<string | null>(null);
+
+  const [sleepTimerRemaining, setSleepTimerRemaining] = useState<number | null>(null);
+  const [sleepTimerMode, setSleepTimerMode] = useState<number | "end-of-track" | null>(null);
+  const sleepTimerEndsAtRef = useRef<number | null>(null);
+  const sleepTimerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const sleepTimerModeRef = useRef<number | "end-of-track" | null>(null);
+  const preFadeVolumeRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    sleepTimerModeRef.current = sleepTimerMode;
+  }, [sleepTimerMode]);
+
+  const cancelSleepTimer = useCallback(() => {
+    if (sleepTimerIntervalRef.current) {
+      clearInterval(sleepTimerIntervalRef.current);
+      sleepTimerIntervalRef.current = null;
+    }
+    sleepTimerEndsAtRef.current = null;
+    setSleepTimerMode(null);
+    setSleepTimerRemaining(null);
+    if (preFadeVolumeRef.current !== null) {
+      transport.current?.setVolume(preFadeVolumeRef.current);
+      setVolumeState(preFadeVolumeRef.current);
+      preFadeVolumeRef.current = null;
+    }
+  }, []);
+
+  const setSleepTimer = useCallback((mode: number | "end-of-track") => {
+    cancelSleepTimer();
+    setSleepTimerMode(mode);
+    if (typeof mode === "number") {
+      const endsAt = Date.now() + mode * 60 * 1000;
+      sleepTimerEndsAtRef.current = endsAt;
+      setSleepTimerRemaining(mode * 60);
+      preFadeVolumeRef.current = volumeRef.current;
+
+      sleepTimerIntervalRef.current = setInterval(() => {
+        const remaining = Math.max(0, Math.round((endsAt - Date.now()) / 1000));
+        setSleepTimerRemaining(remaining);
+
+        // Smooth volume fade out in last 30 seconds
+        if (remaining <= 30 && remaining > 0 && preFadeVolumeRef.current !== null) {
+          const fadeRatio = remaining / 30;
+          const faded = preFadeVolumeRef.current * fadeRatio;
+          transport.current?.setVolume(faded);
+          setVolumeState(faded);
+        }
+
+        if (remaining <= 0) {
+          transport.current?.pause();
+          setIsPlaying(false);
+          if (preFadeVolumeRef.current !== null) {
+            transport.current?.setVolume(preFadeVolumeRef.current);
+            setVolumeState(preFadeVolumeRef.current);
+            preFadeVolumeRef.current = null;
+          }
+          if (sleepTimerIntervalRef.current) {
+            clearInterval(sleepTimerIntervalRef.current);
+            sleepTimerIntervalRef.current = null;
+          }
+          sleepTimerEndsAtRef.current = null;
+          setSleepTimerMode(null);
+          setSleepTimerRemaining(null);
+        }
+      }, 1000);
+    }
+  }, [cancelSleepTimer]);
+
+  useEffect(() => {
+    return () => {
+      if (sleepTimerIntervalRef.current) clearInterval(sleepTimerIntervalRef.current);
+    };
+  }, []);
+
+  const [crossfade, setCrossfadeState] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("innerwave_crossfade");
+      return saved !== null ? Number(saved) : 0;
+    } catch {
+      return 0;
+    }
+  });
+
+  const setCrossfade = useCallback((seconds: number) => {
+    setCrossfadeState(seconds);
+    try {
+      localStorage.setItem("innerwave_crossfade", String(seconds));
+    } catch {}
+  }, []);
+
+  const [audioQuality, setAudioQualityState] = useState<"low" | "normal" | "high">(() => {
+    try {
+      const saved = localStorage.getItem("innerwave_audio_quality");
+      return (saved as "low" | "normal" | "high") || "high";
+    } catch {
+      return "high";
+    }
+  });
+
+  const setAudioQuality = useCallback((quality: "low" | "normal" | "high") => {
+    setAudioQualityState(quality);
+    try {
+      localStorage.setItem("innerwave_audio_quality", quality);
+    } catch {}
+  }, []);
+
+  const [selectedArtistForView, setSelectedArtistForView] = useState<string | null>(null);
+  const openArtistView = useCallback((artistName: string) => {
+    setSelectedArtistForView(artistName);
+  }, []);
+  const closeArtistView = useCallback(() => {
+    setSelectedArtistForView(null);
+  }, []);
+
+  const [activeShareSong, setActiveShareSong] = useState<MediaItem | null>(null);
+  const openShareModal = useCallback((song: MediaItem) => {
+    setActiveShareSong(song);
+  }, []);
+  const closeShareModal = useCallback(() => {
+    setActiveShareSong(null);
+  }, []);
 
   const currentRef = useRef<MediaItem | null>(null);
   const currentTimeRef = useRef(0);
@@ -471,7 +606,54 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     applyRemoteCommand: runCommand,
     applyRemoteSnapshot,
     setLocalPlaybackEnabled,
-  }), [applyRemoteSnapshot, buffered, current, currentTime, dispatchCommand, duration, error, fullscreenOpen, isPlaying, loadMoreQueue, queue, queueIndex, queueOpen, runCommand, setLocalPlaybackEnabled, snapshot, toggleFullscreen, volume]);
+    sleepTimerRemaining,
+    sleepTimerMode,
+    setSleepTimer,
+    cancelSleepTimer,
+    crossfade,
+    setCrossfade,
+    audioQuality,
+    setAudioQuality,
+    selectedArtistForView,
+    openArtistView,
+    closeArtistView,
+    activeShareSong,
+    openShareModal,
+    closeShareModal,
+  }), [
+    activeShareSong,
+    applyRemoteSnapshot,
+    audioQuality,
+    buffered,
+    cancelSleepTimer,
+    closeArtistView,
+    closeShareModal,
+    crossfade,
+    current,
+    currentTime,
+    dispatchCommand,
+    duration,
+    error,
+    fullscreenOpen,
+    isPlaying,
+    loadMoreQueue,
+    openArtistView,
+    openShareModal,
+    queue,
+    queueIndex,
+    queueOpen,
+    runCommand,
+    selectedArtistForView,
+    setAudioQuality,
+    setCrossfade,
+    setLocalPlaybackEnabled,
+    setSleepTimer,
+    sleepTimerMode,
+    sleepTimerRemaining,
+    snapshot,
+    toggleFullscreen,
+    volume,
+  ]);
 
   return (
     <PlayerContext.Provider value={value}>
@@ -490,7 +672,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           setBuffered(nextBuffered);
         }}
         onPlayingChange={(playing) => { if (localPlaybackEnabledRef.current) setIsPlaying(playing); }}
-        onEnded={() => runCommand({ action: "next" })}
+        onEnded={() => {
+          if (sleepTimerModeRef.current === "end-of-track") {
+            transport.current?.pause();
+            setIsPlaying(false);
+            cancelSleepTimer();
+            return;
+          }
+          runCommand({ action: "next" });
+        }}
         onError={(message) => {
           setError(message);
           setIsPlaying(false);

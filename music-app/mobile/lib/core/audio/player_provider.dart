@@ -51,7 +51,11 @@ class PlayerProvider extends ChangeNotifier {
   Set<String> _likedIds = {};
   List<MediaItem> _likedSongs = [];
   Timer? _sleepTimer;
+  Timer? _fadeTimer;
   DateTime? _sleepTimerEndsAt;
+  double? _preFadeVolume;
+  bool _sleepAtTrackEnd = false;
+  String _audioQuality = 'high'; // 'high', 'normal', 'low'
 
   StreamSubscription? _playerStateSubscription;
   StreamSubscription? _positionSubscription;
@@ -260,20 +264,83 @@ class PlayerProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
+  bool get sleepAtTrackEnd => _sleepAtTrackEnd;
+  String get audioQuality => _audioQuality;
+
+  void setAudioQuality(String quality) {
+    _audioQuality = quality;
+    notifyListeners();
+  }
+
+  void setSleepAtTrackEnd(bool enable) {
+    cancelSleepTimer();
+    _sleepAtTrackEnd = enable;
+    notifyListeners();
+  }
+
   void setSleepTimer(Duration duration) {
-    _sleepTimer?.cancel();
+    cancelSleepTimer();
     _sleepTimerEndsAt = DateTime.now().add(duration);
+    _preFadeVolume = _volume;
+
     _sleepTimer = Timer(duration, () {
-      unawaited(_audioPlayer.pause());
-      _sleepTimerEndsAt = null;
-      notifyListeners();
+      _finishSleepTimer();
     });
+
+    final fadeDelay = duration > const Duration(seconds: 30)
+        ? duration - const Duration(seconds: 30)
+        : Duration.zero;
+
+    _fadeTimer = Timer(fadeDelay, () {
+      _startSmoothFadeOut();
+    });
+
+    notifyListeners();
+  }
+
+  void _startSmoothFadeOut() {
+    _fadeTimer?.cancel();
+    _preFadeVolume ??= _volume;
+    final startVol = _volume;
+    int step = 0;
+    const totalSteps = 30;
+    _fadeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      step++;
+      final ratio = (totalSteps - step) / totalSteps;
+      if (ratio <= 0) {
+        timer.cancel();
+        _finishSleepTimer();
+      } else {
+        _audioPlayer.setVolume((startVol * ratio).clamp(0.0, 1.0));
+      }
+    });
+  }
+
+  void _finishSleepTimer() {
+    _sleepTimer?.cancel();
+    _fadeTimer?.cancel();
+    _sleepTimer = null;
+    _fadeTimer = null;
+    _sleepTimerEndsAt = null;
+    unawaited(_audioPlayer.pause());
+    if (_preFadeVolume != null) {
+      _audioPlayer.setVolume(_preFadeVolume!);
+      _preFadeVolume = null;
+    }
     notifyListeners();
   }
 
   void cancelSleepTimer() {
     _sleepTimer?.cancel();
+    _fadeTimer?.cancel();
+    _sleepTimer = null;
+    _fadeTimer = null;
     _sleepTimerEndsAt = null;
+    _sleepAtTrackEnd = false;
+    if (_preFadeVolume != null) {
+      _audioPlayer.setVolume(_preFadeVolume!);
+      _preFadeVolume = null;
+    }
     notifyListeners();
   }
 
@@ -521,7 +588,11 @@ class PlayerProvider extends ChangeNotifier {
       if (audioStreams.isEmpty) {
         throw StateError('YouTube returned no audio-only streams.');
       }
-      audioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      if (_audioQuality == 'low') {
+        audioStreams.sort((a, b) => a.bitrate.compareTo(b.bitrate));
+      } else {
+        audioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      }
       Object? lastStreamError;
       for (final stream in audioStreams) {
         try {
@@ -736,6 +807,12 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   void _onTrackEnded() {
+    if (_sleepAtTrackEnd) {
+      _sleepAtTrackEnd = false;
+      unawaited(_audioPlayer.pause());
+      notifyListeners();
+      return;
+    }
     if (_repeatMode == PlayRepeatMode.one) {
       unawaited(_audioPlayer.seek(Duration.zero));
       unawaited(_audioPlayer.play());

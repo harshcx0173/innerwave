@@ -13,6 +13,7 @@ import 'core/auth/auth_controller.dart';
 import 'core/auth/auth_screen.dart';
 import 'core/audio/innerwave_audio_handler.dart';
 import 'core/audio/player_provider.dart';
+import 'core/playlist/playlist_provider.dart';
 import 'core/config/supabase_config.dart';
 import 'core/sync/playback_sync_controller.dart';
 import 'core/social/listening_room_controller.dart';
@@ -91,6 +92,7 @@ class InnerWaveApp extends StatelessWidget {
           create: (_) => ListeningRoomController(),
           update: (_, auth, player, rooms) => rooms!..update(auth, player),
         ),
+        ChangeNotifierProvider<PlaylistProvider>(create: (_) => PlaylistProvider()),
       ],
       child: MaterialApp(
         title: 'InnerWave',

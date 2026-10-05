@@ -7,8 +7,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/audio/player_provider.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/models/media_model.dart';
+import '../../core/playlist/playlist_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/media_art.dart';
+import '../playlist/playlist_detail_screen.dart';
+import '../playlist/add_to_playlist_sheet.dart';
+import '../player/widgets/song_share_sheet.dart';
+import '../explore/artist_profile_screen.dart';
 import '../profile/profile_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -55,6 +60,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   Widget build(BuildContext context) {
     final player = context.watch<PlayerProvider>();
+    final playlistProv = context.watch<PlaylistProvider>();
+    final playlists = playlistProv.playlists;
     final userName = context.watch<AuthController>().displayName;
     final likedSongs = player.likedSongs;
 
@@ -161,6 +168,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
               children: [
                 _filterChip('All'),
                 const SizedBox(width: 8),
+                _filterChip('Playlists', count: playlists.length),
+                const SizedBox(width: 8),
                 _filterChip('Liked Songs', count: likedSongs.length),
                 const SizedBox(width: 8),
                 _filterChip('Recently Played', count: _history.length),
@@ -170,8 +179,137 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
           const SizedBox(height: 14),
 
+          // 2.5. Custom User Playlists Section (Shown in 'All' or 'Playlists')
+          if (_selectedFilter == 'All' || _selectedFilter == 'Playlists') ...[
+            Padding(
+              padding: const EdgeInsets.only(left: 16, right: 16, top: 4, bottom: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'CUSTOM PLAYLISTS',
+                    style: TextStyle(
+                      color: AppTheme.textMuted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  InkWell(
+                    onTap: () => _showCreatePlaylistDialog(context),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.add, size: 16, color: AppTheme.accent),
+                        SizedBox(width: 4),
+                        Text(
+                          'New Playlist',
+                          style: TextStyle(
+                            color: AppTheme.accent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (playlists.isEmpty)
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppTheme.surfaceElevated,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.playlist_add, color: AppTheme.accent, size: 28),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Create your first playlist', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          SizedBox(height: 2),
+                          Text('Collect your favorite songs in one place', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add_circle, color: AppTheme.accent),
+                      onPressed: () => _showCreatePlaylistDialog(context),
+                    ),
+                  ],
+                ),
+              )
+            else
+              SizedBox(
+                height: 155,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: playlists.length,
+                  itemBuilder: (ctx, i) {
+                    final pl = playlists[i];
+                    return GestureDetector(
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => PlaylistDetailScreen(playlist: pl)),
+                        );
+                      },
+                      child: Container(
+                        width: 120,
+                        margin: const EdgeInsets.only(right: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 120,
+                              height: 100,
+                              decoration: BoxDecoration(
+                                color: AppTheme.surfaceElevated,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: AppTheme.border),
+                                image: pl.coverUrl != null
+                                    ? DecorationImage(
+                                        image: NetworkImage(pl.coverUrl!),
+                                        fit: BoxFit.cover,
+                                      )
+                                    : null,
+                              ),
+                              child: pl.coverUrl == null
+                                  ? const Center(
+                                      child: Icon(Icons.queue_music, size: 36, color: AppTheme.accent),
+                                    )
+                                  : null,
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              pl.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                            Text(
+                              '${pl.songCount} ${pl.songCount == 1 ? "track" : "tracks"}',
+                              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 10),
+          ],
+
           // 3. Dedicated Liked Songs Feature Card (Shown in 'All' or 'Liked Songs')
-          if (_selectedFilter != 'Recently Played') ...[
+          if (_selectedFilter != 'Recently Played' && _selectedFilter != 'Playlists') ...[
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
@@ -393,16 +531,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                             ),
                             onPressed: () => player.toggleLike(item),
                           ),
-                          Icon(
-                            isCurrent && player.isPlaying
-                                ? Icons.pause_circle_filled_rounded
-                                : Icons.play_arrow_rounded,
-                            color: isCurrent ? AppTheme.accent : Colors.white38,
-                            size: 24,
+                          IconButton(
+                            icon: const Icon(Icons.more_vert, color: Colors.white38, size: 18),
+                            onPressed: () => _showSongOptions(context, item),
                           ),
                         ],
                       ),
                       onTap: () => player.play(item, likedSongs),
+                      onLongPress: () => _showSongOptions(context, item),
                     ),
                   ),
                 );
@@ -515,16 +651,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                             ),
                             onPressed: () => player.toggleLike(item),
                           ),
-                          Icon(
-                            isCurrent && player.isPlaying
-                                ? Icons.pause_rounded
-                                : Icons.play_arrow_rounded,
-                            color: isCurrent ? AppTheme.accent : Colors.white30,
-                            size: 20,
+                          IconButton(
+                            icon: const Icon(Icons.more_vert, color: Colors.white38, size: 18),
+                            onPressed: () => _showSongOptions(context, item),
                           ),
                         ],
                       ),
                       onTap: () => player.play(item, _history),
+                      onLongPress: () => _showSongOptions(context, item),
                     ),
                   ),
                 );
@@ -555,6 +689,115 @@ class _LibraryScreenState extends State<LibraryScreen> {
             color: isSelected ? Colors.black : Colors.white,
             fontSize: 12,
             fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showCreatePlaylistDialog(BuildContext context) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceElevated,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('New Playlist', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Enter playlist title...',
+            hintStyle: const TextStyle(color: Colors.white38),
+            filled: true,
+            fillColor: AppTheme.surface,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final text = controller.text.trim();
+              if (text.isNotEmpty) {
+                Navigator.pop(ctx);
+                await context.read<PlaylistProvider>().createPlaylist(text);
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.accent,
+              foregroundColor: Colors.black,
+            ),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSongOptions(BuildContext context, MediaItem item) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.surfaceElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: MediaArt(item: item),
+                  ),
+                ),
+                title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: Text(item.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+              ),
+              const Divider(color: AppTheme.border),
+              ListTile(
+                leading: const Icon(Icons.playlist_add, color: AppTheme.accent),
+                title: const Text('Add to Playlist', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  AddToPlaylistSheet.show(context, item);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.share, color: Colors.cyanAccent),
+                title: const Text('Share Song Card', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  SongShareSheet.show(context, item);
+                },
+              ),
+              if (item.artists.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.person, color: Colors.purpleAccent),
+                  title: Text('View Artist (${item.artists.first})', style: const TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ArtistProfileScreen(artistName: item.artists.first),
+                      ),
+                    );
+                  },
+                ),
+            ],
           ),
         ),
       ),
