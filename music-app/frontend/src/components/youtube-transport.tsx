@@ -13,6 +13,7 @@ type YoutubePlayer = {
   getCurrentTime: () => number;
   getDuration: () => number;
   getVideoLoadedFraction: () => number;
+  getPlayerState?: () => number;
   destroy: () => void;
 };
 
@@ -85,6 +86,7 @@ export const YoutubeTransport = forwardRef<YoutubeTransportHandle, YoutubeTransp
     const pendingSeekRef = useRef<number | null>(null);
     const desiredPlaybackRef = useRef<"play" | "pause" | "stop" | null>(null);
     const desiredVolumeRef = useRef(0.8);
+    const targetSeekSecondsRef = useRef<number | null>(null);
     const callbacksRef = useRef({ onTime, onPlayingChange, onEnded, onError });
     callbacksRef.current = { onTime, onPlayingChange, onEnded, onError };
 
@@ -92,6 +94,9 @@ export const YoutubeTransport = forwardRef<YoutubeTransportHandle, YoutubeTransp
       const player = playerRef.current;
       const pending = pendingRef.current;
       if (!readyRef.current || !player || !pending) return;
+      if (pending.startSeconds > 0) {
+        targetSeekSecondsRef.current = pending.startSeconds;
+      }
       const options = { videoId: pending.videoId, startSeconds: pending.startSeconds };
       if (pending.autoplay && typeof player.loadVideoById === "function") player.loadVideoById(options);
       else if (typeof player.cueVideoById === "function") player.cueVideoById(options);
@@ -102,6 +107,9 @@ export const YoutubeTransport = forwardRef<YoutubeTransportHandle, YoutubeTransp
       load(videoId, startSeconds, autoplay) {
         pendingRef.current = { videoId, startSeconds, autoplay };
         pendingSeekRef.current = null;
+        if (startSeconds > 0) {
+          targetSeekSecondsRef.current = startSeconds;
+        }
         desiredPlaybackRef.current = autoplay ? "play" : "pause";
         loadPending();
       },
@@ -118,12 +126,14 @@ export const YoutubeTransport = forwardRef<YoutubeTransportHandle, YoutubeTransp
       stop() {
         pendingRef.current = null;
         pendingSeekRef.current = null;
+        targetSeekSecondsRef.current = null;
         desiredPlaybackRef.current = "stop";
         const player = playerRef.current;
         if (readyRef.current && typeof player?.stopVideo === "function") player.stopVideo();
       },
       seek(seconds) {
         pendingSeekRef.current = seconds;
+        targetSeekSecondsRef.current = seconds;
         const player = playerRef.current;
         if (readyRef.current && typeof player?.seekTo === "function") {
           player.seekTo(seconds, true);
@@ -169,6 +179,7 @@ export const YoutubeTransport = forwardRef<YoutubeTransportHandle, YoutubeTransp
               }
               loadPending();
               if (pendingSeekRef.current != null && typeof target.seekTo === "function") {
+                targetSeekSecondsRef.current = pendingSeekRef.current;
                 target.seekTo(pendingSeekRef.current, true);
                 pendingSeekRef.current = null;
               }
@@ -179,8 +190,21 @@ export const YoutubeTransport = forwardRef<YoutubeTransportHandle, YoutubeTransp
                 const player = playerRef.current;
                 if (!readyRef.current || !player) return;
                 const duration = typeof player.getDuration === "function" ? player.getDuration() || 0 : 0;
-                const currentTime = typeof player.getCurrentTime === "function" ? player.getCurrentTime() || 0 : 0;
+                const rawCurrentTime = typeof player.getCurrentTime === "function" ? player.getCurrentTime() || 0 : 0;
                 const loadedFraction = typeof player.getVideoLoadedFraction === "function" ? player.getVideoLoadedFraction() || 0 : 0;
+                const state = typeof player.getPlayerState === "function" ? player.getPlayerState() : -1;
+
+                let currentTime = rawCurrentTime;
+                if (targetSeekSecondsRef.current != null) {
+                  const target = targetSeekSecondsRef.current;
+                  // If player is still buffering or reporting a time far behind target, hold at target
+                  if (state !== 1 || rawCurrentTime < Math.max(0, target - 2.5)) {
+                    currentTime = target;
+                  } else {
+                    targetSeekSecondsRef.current = null;
+                  }
+                }
+
                 callbacksRef.current.onTime(
                   currentTime,
                   duration,
@@ -189,8 +213,19 @@ export const YoutubeTransport = forwardRef<YoutubeTransportHandle, YoutubeTransp
               }, 500);
             },
             onStateChange: ({ data }) => {
-              if (data === 1) callbacksRef.current.onPlayingChange(true);
-              if (data === 0) callbacksRef.current.onEnded();
+              if (data === 1) {
+                callbacksRef.current.onPlayingChange(true);
+                const player = playerRef.current;
+                const rawCurrentTime = typeof player?.getCurrentTime === "function" ? player.getCurrentTime() || 0 : 0;
+                if (targetSeekSecondsRef.current != null && rawCurrentTime >= Math.max(0, targetSeekSecondsRef.current - 2.5)) {
+                  targetSeekSecondsRef.current = null;
+                }
+              }
+              if (data === 2) callbacksRef.current.onPlayingChange(false);
+              if (data === 0) {
+                targetSeekSecondsRef.current = null;
+                callbacksRef.current.onEnded();
+              }
             },
             onError: ({ data }) => callbacksRef.current.onError(`YouTube player error (${data}).`),
           },

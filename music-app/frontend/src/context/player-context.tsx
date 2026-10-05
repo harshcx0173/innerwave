@@ -117,6 +117,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
   const volumeRef = useRef(0.8);
+  const lastRemoteSeekOrLoadRef = useRef(0);
 
   useEffect(() => { currentRef.current = current; }, [current]);
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
@@ -260,6 +261,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setError(null);
     const safeTime = Math.max(0, Math.min(duration || time, time));
     resumeTime.current = safeTime;
+    currentTimeRef.current = safeTime;
+    lastRemoteSeekOrLoadRef.current = Date.now() + 2500;
     if (localPlaybackEnabledRef.current) transport.current?.seek(safeTime);
     setCurrentTime(safeTime);
   }, [duration]);
@@ -383,17 +386,27 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const applyRemoteSnapshot = useCallback((next: PlayerSnapshot, playLocally: boolean) => {
     localPlaybackEnabledRef.current = playLocally;
     const elapsed = next.isPlaying ? Math.max(0, (Date.now() - Number(next.capturedAt || Date.now())) / 1000) : 0;
-    const nextTime = Math.max(0, Number(next.currentTime || 0) + elapsed);
+    const safeElapsed = Math.min(elapsed, 15);
+    const trackDuration = Math.max(0, Number(next.duration) || 0);
+    let nextTime = Math.max(0, Number(next.currentTime || 0) + safeElapsed);
+    if (trackDuration > 0 && nextTime > trackDuration) {
+      nextTime = trackDuration;
+    }
+
     if (!playLocally) transport.current?.pause();
 
     const isNewTrack = next.current?.videoId !== currentRef.current?.videoId;
-    if (playLocally && isNewTrack) transport.current?.stop();
+    if (playLocally && isNewTrack) {
+      transport.current?.stop();
+      lastRemoteSeekOrLoadRef.current = Date.now() + 3000;
+    }
     resumeTime.current = nextTime;
+    currentTimeRef.current = nextTime;
     autoplayOnLoad.current = playLocally && next.isPlaying;
     setCurrent(next.current);
     setQueue(Array.isArray(next.queue) ? next.queue : []);
     setQueueIndex(Math.max(0, Number(next.queueIndex) || 0));
-    setDuration(Math.max(0, Number(next.duration) || 0));
+    setDuration(trackDuration);
     setIsPlaying(Boolean(next.isPlaying));
     setQueueContinuation(next.queueContinuation || null);
     seenIdsRef.current = new Set((next.queue || []).map((item) => item.id));
@@ -403,11 +416,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setCurrentTime(nextTime);
         setVolumeState(Math.max(0, Math.min(1, Number(next.volume) || 0)));
       } else {
-        // Same song: ONLY seek if drift exceeds 2.5 seconds to prevent audio cracking/stuttering
+        const isSettling = Date.now() < lastRemoteSeekOrLoadRef.current;
+        // Same song: ONLY seek if drift exceeds 2.5 seconds AND not currently settling after a seek/load
         const drift = Math.abs(currentTimeRef.current - nextTime);
-        if (drift > 2.5) {
+        if (drift > 2.5 && !isSettling) {
           transport.current?.seek(nextTime);
           setCurrentTime(nextTime);
+          currentTimeRef.current = nextTime;
+          lastRemoteSeekOrLoadRef.current = Date.now() + 2000;
         }
         if (Math.abs(volumeRef.current - Number(next.volume || 0)) > 0.05) {
           const nextVol = Math.max(0, Math.min(1, Number(next.volume) || 0));
@@ -464,7 +480,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         ref={transport}
         onTime={(time, nextDuration, nextBuffered) => {
           if (!localPlaybackEnabledRef.current) return;
+          // Prevent zero-reset during initial load/resume
+          if (time === 0 && resumeTime.current > 1 && !isPlayingRef.current) {
+            return;
+          }
           setCurrentTime(time);
+          currentTimeRef.current = time;
           setDuration(nextDuration);
           setBuffered(nextBuffered);
         }}
