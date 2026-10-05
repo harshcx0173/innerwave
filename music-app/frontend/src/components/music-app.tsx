@@ -21,7 +21,7 @@ import { ListeningRoomPanel } from "./listening-room-panel";
 import { usePlaylist, type UserPlaylist } from "@/context/playlist-context";
 import { AddToPlaylistModal } from "./add-to-playlist-modal";
 import { SongShareModal } from "./song-share-modal";
-import { ArtistView } from "./artist-view";
+import { ArtistPage } from "./artist-view";
 
 type View = "home" | "explore" | "library" | "profile";
 
@@ -285,6 +285,7 @@ export function MusicApp() {
   }, [collection, player, view]);
 
   const navigate = useCallback((nextView: View) => {
+    player.closeArtistView();
     setCollection(null);
     if (nextView === "home") { loadHome(); return; }
     if (nextView === "explore") { loadExplore(); return; }
@@ -292,9 +293,10 @@ export function MusicApp() {
     const history = JSON.parse(localStorage.getItem(historyKey) || "[]") as MediaItem[];
     const shelf: ShelfType = { id: "history", title: "Recently played", layout: "list", items: history };
     setView("library"); setTitle("Your Library"); setSubtitle("Your last 50 plays stay private in this browser."); setFeed({ shelves: history.length ? [shelf] : [] }); setError(null);
-  }, [historyKey, loadExplore, loadHome]);
+  }, [historyKey, loadExplore, loadHome, player]);
 
   const openPlaylist = useCallback(async (playlist: UserPlaylist) => {
+    player.closeArtistView();
     setLoading(true);
     setError(null);
     try {
@@ -333,7 +335,7 @@ export function MusicApp() {
     } finally {
       setLoading(false);
     }
-  }, [getPlaylistSongs]);
+  }, [getPlaylistSongs, player]);
 
   const browseExplore = useCallback((kind: "releases" | "charts" | "moods" | "podcasts") => {
     const seed = exploreSeed || "music";
@@ -411,12 +413,69 @@ export function MusicApp() {
           onOpenProfile={() => setView("profile")}
         />
         <div className="page-content">
-          {view === "profile" ? <ProfilePage onBack={() => setView("home")} /> : <>
-          {collection ? <section className="collection-header"><MediaArt item={collection} className="collection-art" /><div><span>{collection.type.toUpperCase()}</span><h1>{collection.title}</h1><p>{collection.subtitle}</p><div className="collection-actions"><button onClick={() => playCollection(false)}><Play fill="currentColor" />Play all</button><button onClick={() => playCollection(true)}><Shuffle />Shuffle</button></div></div></section> : view !== "home" && !exploreLanding ? <section className="home-heading"><h1>{title}</h1><p>{subtitle}</p></section> : null}
-          {view === "home" && <div className="mood-chips">{["All", ...(feed.chips || ["Relax", "Energize", "Workout", "Commute", "Focus"])].map((chip) => <button key={chip} className={activeChip === chip ? "active" : ""} onClick={() => chooseChip(chip)}>{chip}</button>)}</div>}
-          {loading ? <div className="state"><LoaderCircle className="spin" /><p>Loading music…</p></div> : error ? <div className="state error"><p>{error}</p><button onClick={exploreLanding ? loadExplore : loadHome}><RefreshCw size={15} />Try again</button></div> : exploreLanding ? <ExplorePage shelves={feed.shelves} moods={exploreMoods} onSelect={selectItem} onPlayAll={playContainer} onBrowse={browseExplore} onMood={browseMood} /> : feed.shelves.length ? feed.shelves.map((shelf) => <Fragment key={shelf.id}><Shelf shelf={shelf} onSelect={selectItem} onPlayAll={playContainer} />{shelf.id === "discover-1" && <TasteBuilder items={shelf.items} onExplore={() => search("Top artists")} />}</Fragment>) : <div className="state"><p>No playable results found yet.</p></div>}
-          {view === "home" && <div ref={loadMoreRef} className="load-more-sentinel">{loadingMore ? <><LoaderCircle className="spin" /> Loading more</> : nextPage == null ? "You’re all caught up" : ""}</div>}
-          </>}
+          {view === "profile" ? (
+            <ProfilePage onBack={() => setView("home")} />
+          ) : player.selectedArtistForView ? (
+            <ArtistPage
+              artistName={player.selectedArtistForView}
+              onBack={() => player.closeArtistView()}
+            />
+          ) : (
+            <>
+              {collection ? (
+                <section className="collection-header">
+                  <MediaArt item={collection} className="collection-art" />
+                  <div>
+                    <span>{collection.type.toUpperCase()}</span>
+                    <h1>{collection.title}</h1>
+                    <p>{collection.subtitle}</p>
+                    <div className="collection-actions">
+                      <button onClick={() => playCollection(false)}><Play fill="currentColor" />Play all</button>
+                      <button onClick={() => playCollection(true)}><Shuffle />Shuffle</button>
+                    </div>
+                  </div>
+                </section>
+              ) : view !== "home" && !exploreLanding ? (
+                <section className="home-heading">
+                  <h1>{title}</h1>
+                  <p>{subtitle}</p>
+                </section>
+              ) : null}
+              {view === "home" && (
+                <div className="mood-chips">
+                  {["All", ...(feed.chips || ["Relax", "Energize", "Workout", "Commute", "Focus"])].map((chip) => (
+                    <button key={chip} className={activeChip === chip ? "active" : ""} onClick={() => chooseChip(chip)}>
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {loading ? (
+                <div className="state"><LoaderCircle className="spin" /><p>Loading music…</p></div>
+              ) : error ? (
+                <div className="state error">
+                  <p>{error}</p>
+                  <button onClick={exploreLanding ? loadExplore : loadHome}><RefreshCw size={15} />Try again</button>
+                </div>
+              ) : exploreLanding ? (
+                <ExplorePage shelves={feed.shelves} moods={exploreMoods} onSelect={selectItem} onPlayAll={playContainer} onBrowse={browseExplore} onMood={browseMood} />
+              ) : feed.shelves.length ? (
+                feed.shelves.map((shelf) => (
+                  <Fragment key={shelf.id}>
+                    <Shelf shelf={shelf} onSelect={selectItem} onPlayAll={playContainer} />
+                    {shelf.id === "discover-1" && <TasteBuilder items={shelf.items} onExplore={() => search("Top artists")} />}
+                  </Fragment>
+                ))
+              ) : (
+                <div className="state"><p>No playable results found yet.</p></div>
+              )}
+              {view === "home" && (
+                <div ref={loadMoreRef} className="load-more-sentinel">
+                  {loadingMore ? <><LoaderCircle className="spin" /> Loading more</> : nextPage == null ? "You’re all caught up" : ""}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </main>
       <QueuePanel />
@@ -425,7 +484,6 @@ export function MusicApp() {
       <ListeningRoomPanel />
       <AddToPlaylistModal />
       <SongShareModal />
-      <ArtistView />
     </div>
   );
 }
