@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../auth/auth_controller.dart';
@@ -37,6 +39,61 @@ class RoomChatMessage {
   const RoomChatMessage({required this.id, required this.senderId, required this.senderName, required this.body, required this.createdAt, this.replyTo, this.song, this.reactions = const []});
 }
 
+class QueuedRoomSong {
+  final String id;
+  final MediaItem song;
+  final String addedById;
+  final String addedByName;
+  final List<String> votes;
+  final String addedAt;
+
+  const QueuedRoomSong({
+    required this.id,
+    required this.song,
+    required this.addedById,
+    required this.addedByName,
+    required this.votes,
+    required this.addedAt,
+  });
+
+  factory QueuedRoomSong.fromJson(Map<String, dynamic> json) => QueuedRoomSong(
+    id: json['id']?.toString() ?? '',
+    song: MediaItem.fromJson(Map<String, dynamic>.from(json['song'] as Map)),
+    addedById: (json['addedBy'] is Map ? json['addedBy']['id']?.toString() : null) ?? '',
+    addedByName: (json['addedBy'] is Map ? json['addedBy']['name']?.toString() : null) ?? 'Listener',
+    votes: (json['votes'] as List<dynamic>? ?? const []).map((e) => e.toString()).toList(),
+    addedAt: json['addedAt']?.toString() ?? '',
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'song': song.toJson(),
+    'addedBy': {'id': addedById, 'name': addedByName},
+    'votes': votes,
+    'addedAt': addedAt,
+  };
+}
+
+class RoomHistoryItem {
+  final String? id;
+  final String code;
+  final String name;
+  final String timestamp;
+  const RoomHistoryItem({this.id, required this.code, required this.name, required this.timestamp});
+  factory RoomHistoryItem.fromJson(Map<String, dynamic> json) => RoomHistoryItem(
+    id: json['id']?.toString(),
+    code: json['code']?.toString() ?? '',
+    name: json['name']?.toString() ?? '',
+    timestamp: json['timestamp']?.toString() ?? '',
+  );
+  Map<String, dynamic> toJson() => {
+    if (id != null) 'id': id,
+    'code': code,
+    'name': name,
+    'timestamp': timestamp,
+  };
+}
+
 class ListeningRoomController extends ChangeNotifier {
   final SupabaseClient _client = Supabase.instance.client;
   AuthController? _auth; PlayerProvider? _player; RealtimeChannel? _channel;
@@ -45,12 +102,18 @@ class ListeningRoomController extends ChangeNotifier {
   bool _disposed = false;
   final Set<String> _knownMessageIds = {}; bool _messagesReady = false;
   ListeningRoom? _room; List<RoomMember> _members = const []; List<RoomChatMessage> _messages = const [];
+  List<QueuedRoomSong> _roomQueue = const [];
+  List<RoomHistoryItem> _createdRoomsHistory = const [];
+  List<RoomHistoryItem> _joinedRoomsHistory = const [];
   bool _connected = false, _busy = false; String? _error;
 
   bool _isLive = true;
   Map<String, dynamic>? _latestHostSnapshot;
 
   ListeningRoom? get room => _room; List<RoomMember> get members => _members; List<RoomChatMessage> get messages => _messages;
+  List<QueuedRoomSong> get roomQueue => _roomQueue;
+  List<RoomHistoryItem> get createdRoomsHistory => _createdRoomsHistory;
+  List<RoomHistoryItem> get joinedRoomsHistory => _joinedRoomsHistory;
   bool get connected => _connected; bool get busy => _busy; String? get error => _error;
   String? get currentUserId => _userId;
   bool get isLive => _isLive;
@@ -60,15 +123,81 @@ class ListeningRoomController extends ChangeNotifier {
   void update(AuthController auth, PlayerProvider player) {
     _auth = auth; _player = player; final next = auth.user?.id;
     if (next == _userId) return; _userId = next; final generation = ++_generation; unawaited(_resetForAuth(generation));
+    if (next != null) {
+      unawaited(loadRoomHistory());
+    }
   }
 
-  Future<void> _resetForAuth(int generation) async { await _detach(); if (generation != _generation) return; _room = null; _members = const []; _messages = const []; _notify(); }
+  Future<void> _resetForAuth(int generation) async {
+    await _detach();
+    if (generation != _generation) return;
+    _room = null;
+    _members = const [];
+    _messages = const [];
+    _roomQueue = const [];
+    _createdRoomsHistory = const [];
+    _joinedRoomsHistory = const [];
+    _notify();
+  }
+
+  Future<void> loadRoomHistory() async {
+    final userId = _userId;
+    if (userId == null) return;
+    try {
+      final rows = await _client
+          .from('listening_rooms')
+          .select('id, code, name, created_at')
+          .eq('host_id', userId)
+          .order('created_at', ascending: false)
+          .limit(30);
+      _createdRoomsHistory = (rows as List)
+          .map((r) => RoomHistoryItem(
+                id: r['id']?.toString(),
+                code: r['code']?.toString() ?? '',
+                name: r['name']?.toString() ?? '',
+                timestamp: r['created_at']?.toString() ?? '',
+              ))
+          .toList();
+    } catch (_) {}
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('innerwave_joined_rooms_$userId');
+      if (saved != null) {
+        final list = json.decode(saved) as List;
+        _joinedRoomsHistory = list
+            .map((e) => RoomHistoryItem.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList();
+      }
+    } catch (_) {}
+    _notify();
+  }
+
+  Future<void> _recordJoinedRoom(ListeningRoom joined) async {
+    final userId = _userId;
+    if (userId == null || joined.hostId == userId) return;
+    try {
+      final item = RoomHistoryItem(
+        id: joined.id,
+        code: joined.code,
+        name: joined.name,
+        timestamp: DateTime.now().toUtc().toIso8601String(),
+      );
+      final next = [item, ..._joinedRoomsHistory.where((e) => e.code != joined.code)].take(30).toList();
+      _joinedRoomsHistory = next;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('innerwave_joined_rooms_$userId', json.encode(next.map((e) => e.toJson()).toList()));
+    } catch (_) {}
+  }
 
   Future<bool> createRoom([String name = 'My listening room']) async {
     unawaited(RoomNotificationService.requestPermission());
     _setBusy(true); try {
       final raw = await _client.rpc('create_listening_room', params: {'p_name': name.trim()});
-      await _attach(ListeningRoom.fromJson(Map<String, dynamic>.from(raw as Map))); return true;
+      final created = ListeningRoom.fromJson(Map<String, dynamic>.from(raw as Map));
+      await _attach(created);
+      unawaited(loadRoomHistory());
+      return true;
     } catch (e) { _error = e.toString(); return false; } finally { _setBusy(false); }
   }
 
@@ -76,7 +205,10 @@ class ListeningRoomController extends ChangeNotifier {
     unawaited(RoomNotificationService.requestPermission());
     _setBusy(true); try {
       final raw = await _client.rpc('join_listening_room', params: {'p_code': code.trim().toUpperCase()});
-      await _attach(ListeningRoom.fromJson(Map<String, dynamic>.from(raw as Map))); return true;
+      final joined = ListeningRoom.fromJson(Map<String, dynamic>.from(raw as Map));
+      await _attach(joined);
+      unawaited(_recordJoinedRoom(joined));
+      return true;
     } catch (e) { _error = e.toString(); return false; } finally { _setBusy(false); }
   }
 
@@ -84,6 +216,9 @@ class ListeningRoomController extends ChangeNotifier {
     await _detach(); _knownMessageIds.clear(); _messagesReady = false; _room = next; _revision = next.revision;
     _isLive = true;
     _latestHostSnapshot = next.playbackState.isNotEmpty ? next.playbackState : null;
+    final initialQueue = next.playbackState['roomQueue'] as List<dynamic>? ?? const [];
+    _roomQueue = initialQueue.whereType<Map>().map((e) => QueuedRoomSong.fromJson(Map<String, dynamic>.from(e))).toList();
+
     if (next.hostId != _userId && next.playbackState.isNotEmpty) {
       await _player?.applyRemoteSnapshot(next.playbackState, playLocally: true);
     }
@@ -91,10 +226,29 @@ class ListeningRoomController extends ChangeNotifier {
     final channel = _client.channel('room:${next.id}', opts: RealtimeChannelConfig(private: true, key: _clientId, enabled: true)); _channel = channel;
     channel.onPresenceSync((_) => _loadMembersFromPresence(channel))
       .onBroadcast(event: 'playback', callback: (raw) => unawaited(_receivePlayback(_payload(raw))))
+      .onBroadcast(event: 'change_song', callback: (raw) => unawaited(_receiveChangeSong(_payload(raw))))
+      .onBroadcast(event: 'skip_song', callback: (raw) => unawaited(_receiveSkipSong(_payload(raw))))
+      .onBroadcast(event: 'add_to_queue', callback: (raw) => unawaited(_receiveAddToQueue(_payload(raw))))
+      .onBroadcast(event: 'vote_queue', callback: (raw) => unawaited(_receiveVoteQueue(_payload(raw))))
+      .onBroadcast(event: 'play_queued', callback: (raw) => unawaited(_receivePlayQueued(_payload(raw))))
+      .onBroadcast(event: 'remove_from_queue', callback: (raw) => unawaited(_receiveRemoveFromQueue(_payload(raw))))
+      .onBroadcast(event: 'room_queue_sync', callback: (raw) => unawaited(_receiveRoomQueueSync(_payload(raw))))
       .onPostgresChanges(event: PostgresChangeEvent.all, schema: 'public', table: 'room_messages', filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'room_id', value: next.id), callback: (_) => unawaited(_loadMessages()))
       .onPostgresChanges(event: PostgresChangeEvent.all, schema: 'public', table: 'message_reactions', callback: (_) => unawaited(_loadMessages()))
       .onPostgresChanges(event: PostgresChangeEvent.all, schema: 'public', table: 'room_members', filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'room_id', value: next.id), callback: (_) => unawaited(_loadMembers()));
-    channel.subscribe((status, _) async { _connected = status == RealtimeSubscribeStatus.subscribed; _notify(); if (_connected) await channel.track({'userId': _userId, 'name': _auth?.displayName ?? 'Listener', 'clientId': _clientId}); });
+    channel.subscribe((status, _) async {
+      _connected = status == RealtimeSubscribeStatus.subscribed;
+      _notify();
+      if (_connected) {
+        await channel.track({'userId': _userId, 'name': _auth?.displayName ?? 'Listener', 'clientId': _clientId});
+        if (room?.hostId == _userId && _roomQueue.isNotEmpty) {
+          unawaited(channel.sendBroadcastMessage(
+            event: 'room_queue_sync',
+            payload: {'payload': {'queue': _roomQueue.map((e) => e.toJson()).toList()}},
+          ));
+        }
+      }
+    });
     _syncTimer = Timer.periodic(const Duration(milliseconds: 500), (_) => unawaited(_broadcastPlayback()));
     _persistTimer = Timer.periodic(const Duration(seconds: 5), (_) => unawaited(_persistPlayback())); _notify();
   }
@@ -107,6 +261,7 @@ class ListeningRoomController extends ChangeNotifier {
     // Host-only authority: Only the host broadcasts playback state to the room
     if (room.hostId != userId) return;
     final snapshot = player.createSyncSnapshot();
+    snapshot['roomQueue'] = _roomQueue.map((e) => e.toJson()).toList();
     final now = DateTime.now().millisecondsSinceEpoch;
     _revision = max(_revision + 1, now);
     try {
@@ -129,10 +284,8 @@ class ListeningRoomController extends ChangeNotifier {
   Future<void> _receivePlayback(Map<String, dynamic> payload) async {
     final room = _room, userId = _userId;
     if (room == null || userId == null) return;
-    // Host has full authority and never applies remote playback broadcasts
     if (room.hostId == userId) return;
     if (payload['origin'] == _clientId) return;
-    // Only accept broadcasts sent by the room host
     final senderUserId = payload['userId']?.toString();
     if (senderUserId != null && senderUserId != room.hostId) return;
 
@@ -143,9 +296,276 @@ class ListeningRoomController extends ChangeNotifier {
     final snapshot = Map<String, dynamic>.from(raw);
     _revision = revision;
     _latestHostSnapshot = snapshot;
-    // If listener paused locally, keep local pause and do not force playback/seeking
     if (!_isLive) return;
     await _player?.applyRemoteSnapshot(snapshot, playLocally: true);
+  }
+
+  Future<void> _receiveChangeSong(Map<String, dynamic> payload) async {
+    if (!isHost) return;
+    final songRaw = payload['song'];
+    if (songRaw is! Map) return;
+    final song = MediaItem.fromJson(Map<String, dynamic>.from(songRaw));
+    final requesterName = payload['requesterName']?.toString() ?? 'A listener';
+    _player?.play(song);
+    unawaited(RoomNotificationService.show(
+      sender: 'Song Changed',
+      body: '$requesterName started playing ${song.title}',
+      messageId: 'change-${DateTime.now().millisecondsSinceEpoch}',
+    ));
+  }
+
+  Future<void> _receiveSkipSong(Map<String, dynamic> payload) async {
+    if (!isHost) return;
+    final direction = payload['direction']?.toString() ?? 'next';
+    if (direction == 'next') {
+      if (_roomQueue.isNotEmpty) {
+        final top = _roomQueue.first;
+        final remaining = _roomQueue.sublist(1);
+        _roomQueue = remaining;
+        _notify();
+        unawaited(_channel?.sendBroadcastMessage(
+          event: 'room_queue_sync',
+          payload: {'payload': {'queue': remaining.map((e) => e.toJson()).toList()}},
+        ));
+        _player?.play(top.song);
+      } else {
+        _player?.next();
+      }
+    } else {
+      _player?.previous();
+    }
+  }
+
+  Future<void> _receiveAddToQueue(Map<String, dynamic> payload) async {
+    if (!isHost) return;
+    final itemRaw = payload['item'];
+    if (itemRaw is! Map) return;
+    final item = QueuedRoomSong.fromJson(Map<String, dynamic>.from(itemRaw));
+    if (_roomQueue.any((q) => q.song.videoId == item.song.videoId)) return;
+    final nextQueue = [..._roomQueue, item];
+    _roomQueue = nextQueue;
+    _notify();
+    unawaited(_channel?.sendBroadcastMessage(
+      event: 'room_queue_sync',
+      payload: {
+        'payload': {
+          'queue': nextQueue.map((e) => e.toJson()).toList(),
+          'actorName': item.addedByName,
+          'action': 'add',
+          'songTitle': item.song.title,
+        }
+      },
+    ));
+  }
+
+  Future<void> _receiveVoteQueue(Map<String, dynamic> payload) async {
+    if (!isHost) return;
+    final queueItemId = payload['queueItemId']?.toString();
+    final voterId = payload['userId']?.toString();
+    if (queueItemId == null || voterId == null) return;
+    final nextQueue = _roomQueue.map((item) {
+      if (item.id != queueItemId) return item;
+      final hasVoted = item.votes.contains(voterId);
+      final nextVotes = hasVoted ? item.votes.where((id) => id != voterId).toList() : [...item.votes, voterId];
+      return QueuedRoomSong(id: item.id, song: item.song, addedById: item.addedById, addedByName: item.addedByName, votes: nextVotes, addedAt: item.addedAt);
+    }).toList();
+    nextQueue.sort((a, b) => b.votes.length.compareTo(a.votes.length));
+    _roomQueue = nextQueue;
+    _notify();
+    unawaited(_channel?.sendBroadcastMessage(
+      event: 'room_queue_sync',
+      payload: {'payload': {'queue': nextQueue.map((e) => e.toJson()).toList()}},
+    ));
+  }
+
+  Future<void> _receivePlayQueued(Map<String, dynamic> payload) async {
+    if (!isHost) return;
+    final queueItemId = payload['queueItemId']?.toString();
+    if (queueItemId == null) return;
+    final target = _roomQueue.where((item) => item.id == queueItemId).firstOrNull;
+    if (target != null) {
+      final remaining = _roomQueue.where((item) => item.id != queueItemId).toList();
+      _roomQueue = remaining;
+      _notify();
+      unawaited(_channel?.sendBroadcastMessage(
+        event: 'room_queue_sync',
+        payload: {'payload': {'queue': remaining.map((e) => e.toJson()).toList()}},
+      ));
+      _player?.play(target.song);
+    }
+  }
+
+  Future<void> _receiveRemoveFromQueue(Map<String, dynamic> payload) async {
+    if (!isHost) return;
+    final queueItemId = payload['queueItemId']?.toString();
+    if (queueItemId == null) return;
+    final remaining = _roomQueue.where((item) => item.id != queueItemId).toList();
+    _roomQueue = remaining;
+    _notify();
+    unawaited(_channel?.sendBroadcastMessage(
+      event: 'room_queue_sync',
+      payload: {'payload': {'queue': remaining.map((e) => e.toJson()).toList()}},
+    ));
+  }
+
+  Future<void> _receiveRoomQueueSync(Map<String, dynamic> payload) async {
+    if (isHost) return;
+    final rawList = payload['queue'] as List<dynamic>? ?? const [];
+    _roomQueue = rawList.whereType<Map>().map((e) => QueuedRoomSong.fromJson(Map<String, dynamic>.from(e))).toList();
+    _notify();
+  }
+
+  // --- Public actions for Collaborative Playback & Shared Queue ---
+
+  void requestPlaySong(MediaItem song, [List<MediaItem>? context]) {
+    if (_room == null) return;
+    if (isHost) {
+      _player?.play(song);
+    } else {
+      unawaited(_channel?.sendBroadcastMessage(
+        event: 'change_song',
+        payload: {
+          'payload': {
+            'song': song.toJson(),
+            'requesterName': _auth?.displayName ?? 'A listener',
+            'requesterId': _userId ?? '',
+          }
+        },
+      ));
+    }
+  }
+
+  void requestSkipSong([String direction = 'next']) {
+    if (_room == null) return;
+    if (isHost) {
+      if (direction == 'next') {
+        if (_roomQueue.isNotEmpty) {
+          final top = _roomQueue.first;
+          final remaining = _roomQueue.sublist(1);
+          _roomQueue = remaining;
+          _notify();
+          unawaited(_channel?.sendBroadcastMessage(
+            event: 'room_queue_sync',
+            payload: {'payload': {'queue': remaining.map((e) => e.toJson()).toList()}},
+          ));
+          _player?.play(top.song);
+        } else {
+          _player?.next();
+        }
+      } else {
+        _player?.previous();
+      }
+    } else {
+      unawaited(_channel?.sendBroadcastMessage(
+        event: 'skip_song',
+        payload: {
+          'payload': {
+            'direction': direction,
+            'requesterName': _auth?.displayName ?? 'A listener',
+          }
+        },
+      ));
+    }
+  }
+
+  void addToRoomQueue(MediaItem song) {
+    if (_room == null) return;
+    final item = QueuedRoomSong(
+      id: '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(10000)}',
+      song: song,
+      addedById: _userId ?? '',
+      addedByName: _auth?.displayName ?? 'Listener',
+      votes: [_userId ?? ''],
+      addedAt: DateTime.now().toUtc().toIso8601String(),
+    );
+    if (isHost) {
+      if (!_roomQueue.any((q) => q.song.videoId == song.videoId)) {
+        final nextQueue = [..._roomQueue, item];
+        _roomQueue = nextQueue;
+        _notify();
+        unawaited(_channel?.sendBroadcastMessage(
+          event: 'room_queue_sync',
+          payload: {
+            'payload': {
+              'queue': nextQueue.map((e) => e.toJson()).toList(),
+              'actorName': item.addedByName,
+              'action': 'add',
+              'songTitle': item.song.title,
+            }
+          },
+        ));
+      }
+    } else {
+      unawaited(_channel?.sendBroadcastMessage(
+        event: 'add_to_queue',
+        payload: {'payload': {'item': item.toJson()}},
+      ));
+    }
+  }
+
+  void voteSong(String queueItemId) {
+    final uid = _userId;
+    if (_room == null || uid == null) return;
+    if (isHost) {
+      final nextQueue = _roomQueue.map((item) {
+        if (item.id != queueItemId) return item;
+        final hasVoted = item.votes.contains(uid);
+        final nextVotes = hasVoted ? item.votes.where((id) => id != uid).toList() : [...item.votes, uid];
+        return QueuedRoomSong(id: item.id, song: item.song, addedById: item.addedById, addedByName: item.addedByName, votes: nextVotes, addedAt: item.addedAt);
+      }).toList();
+      nextQueue.sort((a, b) => b.votes.length.compareTo(a.votes.length));
+      _roomQueue = nextQueue;
+      _notify();
+      unawaited(_channel?.sendBroadcastMessage(
+        event: 'room_queue_sync',
+        payload: {'payload': {'queue': nextQueue.map((e) => e.toJson()).toList()}},
+      ));
+    } else {
+      unawaited(_channel?.sendBroadcastMessage(
+        event: 'vote_queue',
+        payload: {'payload': {'queueItemId': queueItemId, 'userId': uid}},
+      ));
+    }
+  }
+
+  void playQueuedSong(String queueItemId) {
+    if (_room == null) return;
+    if (isHost) {
+      final target = _roomQueue.where((item) => item.id == queueItemId).firstOrNull;
+      if (target != null) {
+        final remaining = _roomQueue.where((item) => item.id != queueItemId).toList();
+        _roomQueue = remaining;
+        _notify();
+        unawaited(_channel?.sendBroadcastMessage(
+          event: 'room_queue_sync',
+          payload: {'payload': {'queue': remaining.map((e) => e.toJson()).toList()}},
+        ));
+        _player?.play(target.song);
+      }
+    } else {
+      unawaited(_channel?.sendBroadcastMessage(
+        event: 'play_queued',
+        payload: {'payload': {'queueItemId': queueItemId}},
+      ));
+    }
+  }
+
+  void removeFromRoomQueue(String queueItemId) {
+    if (_room == null) return;
+    if (isHost) {
+      final remaining = _roomQueue.where((item) => item.id != queueItemId).toList();
+      _roomQueue = remaining;
+      _notify();
+      unawaited(_channel?.sendBroadcastMessage(
+        event: 'room_queue_sync',
+        payload: {'payload': {'queue': remaining.map((e) => e.toJson()).toList()}},
+      ));
+    } else {
+      unawaited(_channel?.sendBroadcastMessage(
+        event: 'remove_from_queue',
+        payload: {'payload': {'queueItemId': queueItemId}},
+      ));
+    }
   }
 
   void pauseListener() {
@@ -168,8 +588,10 @@ class ListeningRoomController extends ChangeNotifier {
     // Only the host persists playback state
     if (room.hostId != userId) return;
     try {
+      final snap = player.createSyncSnapshot();
+      snap['roomQueue'] = _roomQueue.map((e) => e.toJson()).toList();
       await _client.from('listening_rooms').update({
-        'playback_state': player.createSyncSnapshot(),
+        'playback_state': snap,
         'revision': _revision,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', room.id);
@@ -201,8 +623,8 @@ class ListeningRoomController extends ChangeNotifier {
 
   Future<bool> sendMessage(String body, {String? replyTo, MediaItem? song}) async { if (_room == null || _userId == null || (body.trim().isEmpty && song == null)) return false; try { await _client.from('room_messages').insert({'room_id': _room!.id, 'sender_id': _userId, 'body': body.trim(), 'reply_to': replyTo, 'song': song?.toJson()}); await _loadMessages(); return true; } catch (e) { _error = e.toString(); _notify(); return false; } }
   Future<void> toggleReaction(String messageId, String emoji) async { if (_userId == null) return; final exists = _messages.any((m) => m.id == messageId && m.reactions.any((r) => r.userId == _userId && r.emoji == emoji)); if (exists) { await _client.from('message_reactions').delete().eq('message_id', messageId).eq('user_id', _userId!).eq('emoji', emoji); } else { await _client.from('message_reactions').insert({'message_id': messageId, 'user_id': _userId, 'emoji': emoji}); } await _loadMessages(); }
-  Future<void> leaveRoom() async { final active = _room; await _detach(); if (active != null && _userId != null) await _client.from('room_members').delete().eq('room_id', active.id).eq('user_id', _userId!); _room = null; _members = const []; _messages = const []; _notify(); }
-  Future<void> _detach() async { _syncTimer?.cancel(); _persistTimer?.cancel(); _syncTimer = null; _persistTimer = null; final channel = _channel; _channel = null; if (channel != null) await _client.removeChannel(channel); _connected = false; _isLive = true; _latestHostSnapshot = null; }
+  Future<void> leaveRoom() async { final active = _room; await _detach(); if (active != null && _userId != null) await _client.from('room_members').delete().eq('room_id', active.id).eq('user_id', _userId!); _room = null; _members = const []; _messages = const []; _roomQueue = const []; _notify(); }
+  Future<void> _detach() async { _syncTimer?.cancel(); _persistTimer?.cancel(); _syncTimer = null; _persistTimer = null; final channel = _channel; _channel = null; if (channel != null) await _client.removeChannel(channel); _connected = false; _isLive = true; _latestHostSnapshot = null; _roomQueue = const []; }
   void _setBusy(bool value) { _busy = value; if (value) _error = null; _notify(); }
   void _notify() { if (!_disposed) notifyListeners(); }
   @override void dispose() { _disposed = true; _syncTimer?.cancel(); _persistTimer?.cancel(); if (_channel != null) unawaited(_client.removeChannel(_channel!)); super.dispose(); }

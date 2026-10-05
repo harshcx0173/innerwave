@@ -58,6 +58,9 @@ class PlayerProvider extends ChangeNotifier {
   StreamSubscription? _durationSubscription;
   StreamSubscription? _bufferedSubscription;
   ja.ProcessingState _lastProcessingState = ja.ProcessingState.idle;
+  Duration? _targetSeekPosition;
+  DateTime? _lastRemoteSeekOrLoadTime;
+  String? _loadingVideoId;
 
   PlayerProvider({required this.api, this.audioHandler}) {
     unawaited(_audioPlayer.setVolume(_volume));
@@ -298,7 +301,17 @@ class PlayerProvider extends ChangeNotifier {
 
     _positionSubscription = _audioPlayer.positionStream.listen((position) {
       if (!_localPlaybackEnabled) return;
-      _position = position;
+      if (_targetSeekPosition != null) {
+        final target = _targetSeekPosition!;
+        if (!_audioPlayer.playing || position < (target - const Duration(seconds: 2))) {
+          _position = target;
+        } else {
+          _targetSeekPosition = null;
+          _position = position;
+        }
+      } else {
+        _position = position;
+      }
       notifyListeners();
     });
     _durationSubscription = _audioPlayer.durationStream.listen((duration) {
@@ -715,6 +728,9 @@ class PlayerProvider extends ChangeNotifier {
       return;
     }
     _position = position;
+    _targetSeekPosition = position;
+    _lastRemoteSeekOrLoadTime = DateTime.now().add(const Duration(milliseconds: 2500));
+    notifyListeners();
     unawaited(_audioPlayer.seek(position));
     _syncAudioService();
   }
@@ -951,17 +967,27 @@ class PlayerProvider extends ChangeNotifier {
       unawaited(_preloadLyricsAndRelated(_current!));
     }
     if (videoId != null) {
-      if (_loadedVideoId != videoId) {
-        _position = remotePosition;
-        notifyListeners();
-        await _loadAndPlayStream(videoId, autoplay: playing, start: remotePosition);
+      final isNewTrack = _loadedVideoId != videoId;
+      if (isNewTrack) {
+        if (_loadingVideoId != videoId) {
+          _loadingVideoId = videoId;
+          _targetSeekPosition = remotePosition > Duration.zero ? remotePosition : null;
+          _lastRemoteSeekOrLoadTime = DateTime.now().add(const Duration(milliseconds: 3000));
+          _position = remotePosition;
+          notifyListeners();
+          await _loadAndPlayStream(videoId, autoplay: playing, start: remotePosition);
+          _loadingVideoId = null;
+        }
       } else {
+        final isSettling = _lastRemoteSeekOrLoadTime != null && DateTime.now().isBefore(_lastRemoteSeekOrLoadTime!);
         final currentPos = _audioPlayer.position;
         final driftMs = (remotePosition - currentPos).inMilliseconds.abs();
-        if (driftMs > 2500) {
+        if (driftMs > 2500 && !isSettling) {
           _position = remotePosition;
+          _targetSeekPosition = remotePosition;
+          _lastRemoteSeekOrLoadTime = DateTime.now().add(const Duration(milliseconds: 2000));
           await _audioPlayer.seek(remotePosition);
-        } else {
+        } else if (!isSettling) {
           _position = currentPos;
         }
         if (playing && !_audioPlayer.playing) {
