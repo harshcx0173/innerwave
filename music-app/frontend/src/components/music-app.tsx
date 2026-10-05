@@ -17,6 +17,7 @@ import { MediaArt } from "./media-art";
 import { TasteBuilder } from "./taste-builder";
 import { ProfilePage } from "./profile-page";
 import { ExplorePage } from "./explore-page";
+import { ListeningRoomPanel } from "./listening-room-panel";
 
 type View = "home" | "explore" | "library" | "profile";
 
@@ -375,6 +376,7 @@ export function MusicApp() {
       <QueuePanel />
       <FullscreenPlayer />
       <PlayerBar />
+      <ListeningRoomPanel />
     </div>
   );
 }

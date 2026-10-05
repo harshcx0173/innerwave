@@ -23,6 +23,7 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
   late TabController _tabController;
   LyricsResponse? _lyrics;
   bool _loadingLyrics = false;
+  int _lyricsRequestId = 0;
   String? _loadedLyricsTrackId;
   double _lyricsOffset = 0.0;
   final ScrollController _lyricsScrollController = ScrollController();
@@ -122,7 +123,8 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
       }
       return;
     }
-    if (_loadingLyrics || (item.id == _loadedLyricsTrackId && _lyrics != null)) return;
+    if (item.id == _loadedLyricsTrackId && (_loadingLyrics || _lyrics != null)) return;
+    final requestId = ++_lyricsRequestId;
     setState(() => _loadingLyrics = true);
     _loadedLyricsTrackId = item.id;
 
@@ -133,21 +135,21 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
         artist: item.artists.isNotEmpty ? item.artists.first : (item.subtitle.isNotEmpty ? item.subtitle : null),
         duration: player.duration.inSeconds > 0 ? player.duration.inSeconds : null,
       );
-      if (mounted && item.id == _loadedLyricsTrackId) {
+      if (mounted && requestId == _lyricsRequestId && item.id == _loadedLyricsTrackId && player.current?.id == item.id) {
         setState(() {
           _lyrics = res;
           _lyricKeys = List.generate(res.lines.length, (_) => GlobalKey());
         });
       }
     } catch (_) {
-      if (mounted && item.id == _loadedLyricsTrackId) {
+      if (mounted && requestId == _lyricsRequestId && item.id == _loadedLyricsTrackId && player.current?.id == item.id) {
         setState(() {
           _lyrics = LyricsResponse(lyrics: 'No lyrics available for this track.');
           _lyricKeys = [];
         });
       }
     } finally {
-      if (mounted) setState(() => _loadingLyrics = false);
+      if (mounted && requestId == _lyricsRequestId) setState(() => _loadingLyrics = false);
     }
   }
 
@@ -199,8 +201,10 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
 
         // Preload lyrics & extract adaptive palette when track changes
         if (current.id != _loadedLyricsTrackId) {
+          ++_lyricsRequestId;
           _lastActiveLyricIndex = -1;
           _lyrics = null;
+          _loadingLyrics = false;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
               _loadLyrics(current, player);

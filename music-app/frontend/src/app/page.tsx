@@ -4,7 +4,8 @@ import { AuthProvider } from "@/context/auth-context";
 import { PlayerProvider } from "@/context/player-context";
 import { ConnectProvider } from "@/context/connect-context";
 import { PresenceReporter } from "@/components/presence-reporter";
+import { ListeningRoomProvider } from "@/context/listening-room-context";
 
 export default function Home() {
-  return <AuthProvider><AuthGate><PlayerProvider><ConnectProvider><PresenceReporter /><MusicApp /></ConnectProvider></PlayerProvider></AuthGate></AuthProvider>;
+  return <AuthProvider><AuthGate><PlayerProvider><ConnectProvider><ListeningRoomProvider><PresenceReporter /><MusicApp /></ListeningRoomProvider></ConnectProvider></PlayerProvider></AuthGate></AuthProvider>;
 }

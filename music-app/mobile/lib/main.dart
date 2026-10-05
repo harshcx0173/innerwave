@@ -15,11 +15,14 @@ import 'core/audio/innerwave_audio_handler.dart';
 import 'core/audio/player_provider.dart';
 import 'core/config/supabase_config.dart';
 import 'core/sync/playback_sync_controller.dart';
+import 'core/social/listening_room_controller.dart';
+import 'core/social/room_notification_service.dart';
 import 'core/theme/app_theme.dart';
 import 'core/widgets/mini_player.dart';
 import 'features/home/home_screen.dart';
 import 'features/explore/explore_screen.dart';
 import 'features/library/library_screen.dart';
+import 'features/social/listening_room_sheet.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +30,7 @@ Future<void> main() async {
     url: SupabaseConfig.url,
     publishableKey: SupabaseConfig.publishableKey,
   );
+  await RoomNotificationService.initialize();
 
   final audioHandler = await AudioService.init(
     builder: () => InnerWaveAudioHandler(),
@@ -81,6 +85,11 @@ class InnerWaveApp extends StatelessWidget {
             PlaybackSyncController>(
           create: (_) => PlaybackSyncController(),
           update: (_, auth, player, sync) => sync!..update(auth, player),
+        ),
+        ChangeNotifierProxyProvider2<AuthController, PlayerProvider,
+            ListeningRoomController>(
+          create: (_) => ListeningRoomController(),
+          update: (_, auth, player, rooms) => rooms!..update(auth, player),
         ),
       ],
       child: MaterialApp(
@@ -173,6 +182,16 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     );
   }
 
+  void _showListeningRoom() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: const Color(0xFF151817),
+      builder: (_) => const ListeningRoomSheet(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -183,13 +202,11 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
           Positioned(
             right: 12,
             top: MediaQuery.paddingOf(context).top + 8,
-            child: Consumer<PlaybackSyncController>(
-              builder: (_, sync, __) => IconButton.filledTonal(
-                onPressed: _showConnect,
-                tooltip: 'InnerWave Connect',
-                icon: Icon(Icons.speaker_group_outlined, color: sync.connected ? const Color(0xFFD5FF63) : Colors.white70),
-              ),
-            ),
+            child: Row(children: [
+              Consumer<ListeningRoomController>(builder: (context, room, child) => IconButton.filledTonal(onPressed: _showListeningRoom, tooltip: 'Listening room', icon: Icon(Icons.forum_outlined, color: room.room != null && room.connected ? const Color(0xFFD5FF63) : Colors.white70))),
+              const SizedBox(width: 6),
+              Consumer<PlaybackSyncController>(builder: (context, sync, child) => IconButton.filledTonal(onPressed: _showConnect, tooltip: 'InnerWave Connect', icon: Icon(Icons.speaker_group_outlined, color: sync.connected ? const Color(0xFFD5FF63) : Colors.white70))),
+            ]),
           ),
         ],
       ),

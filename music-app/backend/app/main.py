@@ -440,8 +440,8 @@ def lyrics(
     artist: str = Query(default="", max_length=300),
     duration: float | None = Query(default=None, gt=0, le=7200),
 ) -> dict:
-    result: dict = {"lyrics": "", "source": None}
-    try:
+    def load() -> dict:
+        result: dict = {"lyrics": "", "source": None}
         try:
             result = parse_lyrics(service.browse(_watch_tab(videoId, "lyrics")))
         except Exception:
@@ -458,13 +458,11 @@ def lyrics(
             result["lyrics"] = str(synced_match.get("plainLyrics") or "")
         if not result.get("lyrics") and not timed_lines:
             raise HTTPException(status_code=404, detail="Lyrics are not available for this track")
-        return {
-            **result,
-            "lines": timed_lines,
-            "synced": bool(timed_lines),
-            "syncSource": "LRCLIB" if timed_lines else None,
-            "matchedTrack": synced_match.get("trackName") if synced_match else None,
-        }
+        return {**result, "lines": timed_lines, "synced": bool(timed_lines), "syncSource": "LRCLIB" if timed_lines else None, "matchedTrack": synced_match.get("trackName") if synced_match else None}
+
+    try:
+        duration_key = round(duration or 0)
+        return service.cached(f"lyrics:{videoId}:{title.lower()}:{artist.lower()}:{duration_key}", 43200, load)
     except HTTPException:
         raise
     except Exception as exc:

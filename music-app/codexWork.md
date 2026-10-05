@@ -812,3 +812,108 @@ The Supabase CLI is not installed and no Supabase management access token/databa
 - `git diff --check` passed; only existing Windows line-ending warnings were shown.
 - No dependency installation, production build, Git commit, GitHub push, Render deployment, or Vercel deployment was performed.
 - Five-hour Codex usage checkpoint: 35% used / 65% remaining, above the requested 30% remaining stop threshold.
+
+## 05/10/2026 01:33 PM IST — Listening Rooms + Chat + Lyrics Performance (safe stop at 30% remaining)
+
+### User request
+
+- Add synchronized music sharing on web and Flutter mobile with low-latency playback updates.
+- Support group rooms as well as 1:1 rooms.
+- Add room chat with mentions, emoji, replies, message reactions, and playable song suggestions.
+- Format chat time in IST: relative minutes under one hour, 12-hour clock up to the previous calendar day, `Yesterday {time}`, then `DD/MM/YYYY {time}`.
+- Reduce lyrics API load and fix mobile lyrics remaining stuck on the previous track after Next/Previous.
+- Do not push to GitHub.
+
+### Local implementation completed
+
+- Added `supabase/migrations/005_listening_rooms.sql` with listening rooms, room members, messages, replies, song JSON cards, reactions, indexes, RLS, secure create/join RPCs, Realtime publication setup, and private room broadcast/presence policies.
+- Added web `ListeningRoomProvider` with create/join/leave, member presence, message/reaction refresh, durable playback snapshots, 500 ms realtime playback broadcast, latest-controller handoff, and feedback-loop suppression.
+- Added web listening-room drawer with code copy, online member avatars, chat, `@mention` autocomplete, emoji picker, quoted replies, hover reactions, grouped reaction counts, current-song suggestions, and click-to-play song cards.
+- Added IST chat formatter in `frontend/src/lib/chat-time.ts` implementing the requested time rules.
+- Added Flutter `ListeningRoomController` with the same Supabase room RPCs, presence, DB realtime subscriptions, chat/reactions, durable state, 500 ms playback sync, controller handoff, and feedback-loop suppression.
+- Added Flutter listening-room bottom sheet with create/join, online members, chat, mentions, emoji, replies, long-press reaction picker, grouped reactions, current-song suggestions, and playable song cards.
+- Added the Flutter room provider and room button beside InnerWave Connect in `mobile/lib/main.dart`.
+- Fixed stale mobile lyrics by clearing lyrics immediately on every local/remote track change and adding request-generation guards in both `PlayerProvider` and `FullscreenPlayerScreen`; late responses from the previous track can no longer overwrite the current track.
+- Reduced lyrics load at three layers: existing Flutter memory/disk/in-flight cache remains active, web now has 12-hour memory cache plus in-flight request deduplication, and backend final lyric results are cached for 12 hours. Aborting one web view no longer cancels the shared underlying request.
+
+### Files changed/added
+
+- `backend/app/main.py`
+- `frontend/src/app/globals.css`
+- `frontend/src/app/page.tsx`
+- `frontend/src/components/music-app.tsx`
+- `frontend/src/components/listening-room-panel.tsx` (new)
+- `frontend/src/context/listening-room-context.tsx` (new)
+- `frontend/src/lib/api.ts`
+- `frontend/src/lib/chat-time.ts` (new)
+- `mobile/lib/core/audio/player_provider.dart`
+- `mobile/lib/core/social/listening_room_controller.dart` (new)
+- `mobile/lib/features/player/fullscreen_player.dart`
+- `mobile/lib/features/social/listening_room_sheet.dart` (new)
+- `mobile/lib/main.dart`
+- `supabase/migrations/005_listening_rooms.sql` (new)
+
+### Verification completed
+
+- `frontend`: `npm run build` passed, including production compilation, TypeScript validation, page-data collection, and all static routes.
+- `mobile`: focused `flutter analyze lib` completed with **zero compile errors**. It reports three unnecessary-cast warnings in the new room controller plus pre-existing/info-level deprecations; these do not block compilation.
+- No Git commit and no GitHub push were performed.
+
+### Mandatory safe-stop state / exact continuation
+
+- Codex five-hour limit reached exactly **70% used / 30% remaining**, so work stopped per the user's standing instruction.
+- The SQL migration is created locally but has **not yet been applied to the live Supabase project**. Until it is applied, room create/join will report that the tables/functions do not exist.
+- Still to run after limit reset: clean the three analyzer cast warnings, rerun `flutter analyze lib`, run backend tests, run `git diff --check`, apply migration `005_listening_rooms.sql` to Supabase, then test one web + one Android device in the same room for create/join/chat/reply/reaction/song-card and bidirectional play/pause/seek/next/volume synchronization.
+- Deployment was intentionally not performed and GitHub was not pushed.
+
+## 05/10/2026 01:49 PM IST — Resumed with 15% safe-stop threshold
+
+### Follow-up completed
+
+- Changed the five-hour safe-stop threshold from 30% remaining to 15% remaining as requested.
+- Removed all three analyzer warnings introduced by the new Flutter room code. `flutter analyze lib` now has zero errors/warnings from this work; only three unrelated pre-existing info-level Flutter deprecation notices remain.
+- Added `mobile/test/chat_time_test.dart` with four deterministic tests covering all requested IST timestamp states: under-one-hour relative minutes, same-day 12-hour time, `Yesterday {time}`, and older `DD/MM/YYYY {time}`.
+- Tightened migration permissions: authenticated clients can update only `playback_state`, `revision`, and `updated_at` on rooms, and only `last_seen` on memberships. They cannot rewrite host/room identity columns through the REST API.
+
+### Final verification results
+
+- Frontend production build: **passed** (`npm run build`).
+- Backend test suite: **11/11 passed**. The correct no-install command used the existing `.venv` dependencies and cloned InnerTube package through a temporary `PYTHONPATH`; no package was downloaded.
+- Flutter existing suite: **3/3 passed**.
+- Flutter chat timestamp suite: **4/4 passed**.
+- Flutter analyzer: no compile errors and no warnings from the newly added code.
+- `git diff --check`: passed; only expected Windows LF→CRLF notices.
+- No commit, GitHub push, Render deployment, or Vercel deployment was performed.
+
+### Deployment boundary
+
+- Local machine has no Supabase CLI, database password, service-role key, or management token—only the frontend publishable key. Therefore migration `supabase/migrations/005_listening_rooms.sql` cannot be safely applied automatically from this workspace.
+- Required activation step: open the Supabase project SQL Editor, paste the complete `005_listening_rooms.sql`, and run it once. This creates the tables/RPCs/RLS/Realtime policies used by both web and Flutter.
+- After applying SQL, perform the documented two-device acceptance test. No code change is expected for this activation step.
+
+### Disk management
+
+- Permanently removed only generated/rebuildable task artifacts: `frontend/.next`, `mobile/build`, and `backend/.pytest_cache`.
+- Approximately **1.56 GB** of generated data was targeted; D: free space increased from **45.35 GB to 46.72 GB**.
+- Source files, dependencies, user files, local sessions, and Git history were not deleted.
+
+### Current five-hour usage checkpoint
+
+- Last checked at **81% used / 19% remaining**, still above the new 15% remaining stop threshold.
+
+## 05/10/2026 — Supabase room-code RPC hotfix
+
+- Live `create_listening_room` failed because `gen_random_bytes(integer)` was unavailable in the project database.
+- Replaced that dependency in the main migration with built-in `gen_random_uuid()` and removed hyphens before taking the six-character uppercase room code.
+- Added `supabase/migrations/006_fix_room_code_generator.sql` as a small production hotfix for databases where migration 005 was already executed.
+- The hotfix also sends `notify pgrst, 'reload schema'` so PostgREST refreshes the RPC definition and the `/rest/v1/rpc/create_listening_room` endpoint stops returning a stale 404.
+- No Git commit or push was performed.
+
+## 05/10/2026 — Web and mobile room notifications
+
+- Added deduplicated notifications for another member's new room message or song suggestion; own messages and initial history never notify.
+- Web requests Notification permission from the create/join user gesture, uses system browser notifications while hidden, and an auto-dismiss/click-to-open in-app toast while visible.
+- Flutter uses a dedicated high-importance `Listening room chat` notification channel with Android/iOS permission requests and system notifications in foreground/background.
+- Added cached `flutter_local_notifications` dependency; no unrelated package upgrades were performed.
+- Verification: frontend production build passed; Flutter full suite passed **7/7**; Flutter analyzer has no new errors/warnings (three unrelated pre-existing deprecation infos remain).
+- User authorized commit and GitHub push for this complete local change set.

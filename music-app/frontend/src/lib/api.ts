@@ -11,6 +11,20 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+type LyricsPayload = { lyrics: string; source?: string | null; lines: { time: number; text: string }[]; synced: boolean; syncSource?: string | null };
+const lyricsCache = new Map<string, { expires: number; value: LyricsPayload }>();
+const lyricsInFlight = new Map<string, Promise<LyricsPayload>>();
+
+function withAbort<T>(request: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return request;
+  if (signal.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    request.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 export const musicApi = {
   home: (signal?: AbortSignal) => getJson<Feed>("/api/home", signal),
   search: (query: string, signal?: AbortSignal) =>
@@ -36,7 +50,18 @@ export const musicApi = {
     const artist = item.artists.join(", ") || item.subtitle.split(" · ")[0] || "";
     const query = new URLSearchParams({ videoId: item.videoId || "", title: item.title, artist });
     if (duration && Number.isFinite(duration)) query.set("duration", String(duration));
-    return getJson<{ lyrics: string; source?: string | null; lines: { time: number; text: string }[]; synced: boolean; syncSource?: string | null }>(`/api/lyrics?${query}`, signal);
+    const key = `${item.videoId || item.id}:${duration ? Math.round(duration) : 0}`;
+    const cached = lyricsCache.get(key);
+    if (cached && cached.expires > Date.now()) return withAbort(Promise.resolve(cached.value), signal);
+    let request = lyricsInFlight.get(key);
+    if (!request) {
+      request = getJson<LyricsPayload>(`/api/lyrics?${query}`).then((value) => {
+        lyricsCache.set(key, { value, expires: Date.now() + 12 * 60 * 60 * 1000 });
+        return value;
+      }).finally(() => lyricsInFlight.delete(key));
+      lyricsInFlight.set(key, request);
+    }
+    return withAbort(request, signal);
   },
   related: (item: MediaItem, signal?: AbortSignal) => {
     const artist = item.artists.join(", ") || item.subtitle.split(" · ")[0] || "";

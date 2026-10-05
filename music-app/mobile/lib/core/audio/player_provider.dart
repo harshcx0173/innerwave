@@ -31,6 +31,7 @@ class PlayerProvider extends ChangeNotifier {
   int _sessionGeneration = 0;
   final Set<String> _seenIds = {};
   LyricsResponse? _currentLyrics;
+  int _lyricsRequestId = 0;
 
   bool _isPlaying = false;
   Duration _position = Duration.zero;
@@ -104,16 +105,19 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   Future<void> _preloadLyricsAndRelated(MediaItem item) async {
+    final requestId = ++_lyricsRequestId;
     final videoId = item.videoId ?? item.id;
     final artist = item.artists.isNotEmpty
         ? item.artists.first
         : (item.subtitle.isNotEmpty ? item.subtitle : null);
     try {
-      _currentLyrics = await api.getLyrics(
+      final lyrics = await api.getLyrics(
         videoId: videoId,
         title: item.title,
         artist: artist,
       );
+      if (requestId != _lyricsRequestId || _current?.id != item.id) return;
+      _currentLyrics = lyrics;
       notifyListeners();
     } catch (_) {}
 
@@ -425,6 +429,7 @@ class PlayerProvider extends ChangeNotifier {
     final queueRequestId = ++_queueRequestId;
     _error = null;
     _current = item;
+    _currentLyrics = null;
 
     if (contextList != null && contextList.isNotEmpty) {
       final playable = contextList.where((e) => e.videoId != null).toList();
@@ -643,6 +648,7 @@ class PlayerProvider extends ChangeNotifier {
       _queueIndex++;
       final nextItem = _queue[_queueIndex];
       _current = nextItem;
+      _currentLyrics = null;
       _seenIds.add(nextItem.id);
       notifyListeners();
       unawaited(_preloadLyricsAndRelated(nextItem));
@@ -680,6 +686,7 @@ class PlayerProvider extends ChangeNotifier {
       _queueIndex--;
       final prevItem = _queue[_queueIndex];
       _current = prevItem;
+      _currentLyrics = null;
       _seenIds.add(prevItem.id);
       notifyListeners();
       unawaited(_preloadLyricsAndRelated(prevItem));
@@ -882,10 +889,15 @@ class PlayerProvider extends ChangeNotifier {
     required bool playLocally,
   }) async {
     _localPlaybackEnabled = playLocally;
+    final previousTrackId = _current?.id;
     final currentJson = snapshot['current'];
     _current = currentJson is Map
         ? MediaItem.fromJson(Map<String, dynamic>.from(currentJson))
         : null;
+    if (_current?.id != previousTrackId) {
+      _currentLyrics = null;
+      ++_lyricsRequestId;
+    }
     _queue = (snapshot['queue'] as List<dynamic>? ?? const [])
         .whereType<Map>()
         .map((entry) => MediaItem.fromJson(Map<String, dynamic>.from(entry)))
@@ -924,6 +936,9 @@ class PlayerProvider extends ChangeNotifier {
     }
     await _audioPlayer.setVolume(_volume);
     final videoId = _current?.videoId;
+    if (_current != null && _currentLyrics == null) {
+      unawaited(_preloadLyricsAndRelated(_current!));
+    }
     if (videoId != null) {
       await _loadAndPlayStream(videoId, autoplay: playing, start: _position);
     }
