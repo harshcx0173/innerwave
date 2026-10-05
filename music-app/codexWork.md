@@ -1076,4 +1076,149 @@ The Supabase CLI is not installed and no Supabase management access token/databa
 - Frontend production build (`npm run build`) passed with zero errors.
 - Frontend lint (`npm run lint`) passed with zero errors.
 
+## 05/10/2026 — Room Queue Search Results Uncapping, Container Max-Height Expansion & Multi-Stage Thumbnail Fallback
+
+### User report & Requirements
+1. **Show all search results (remove arbitrary limit)**:
+   - Search & Add to Queue previously limited results to `.slice(0, 5)`.
+   - Requirement: Display all matching playable tracks without a fixed limit, deduplicating any repetitive results.
+2. **Increase search results container max-height**:
+   - The results dropdown was previously constrained to 150px.
+   - Requirement: Increase the max-height substantially with smooth scrollbar styling so users can easily browse through numerous results.
+3. **Fix broken / missing song thumbnails**:
+   - Some songs returned from YouTube / InnerTube had missing or broken thumbnail URLs (often blocked by referrer policies or 403 Forbidden on Google CDN).
+   - Requirement: Guarantee thumbnail display across search results, now playing, chat songs, and queue cards using YouTube image fallbacks (`hqdefault.jpg` and `mqdefault.jpg`) and `referrerPolicy="no-referrer"`.
+
+### Implemented changes
+- **Uncapped & Deduplicated Search**:
+  - In [listening-room-panel.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/listening-room-panel.tsx):
+    - Removed `.slice(0, 5)`.
+    - Added deduplication set over `item.videoId || item.id`, filtering for all playable tracks returned by `musicApi.search(query)`.
+- **Search Results Container Max-Height & Custom Scrollbar**:
+  - In [globals.css](file:///d:/Learn/InnerTube/music-app/frontend/src/app/globals.css):
+    - Increased `.room-queue-search-results` `max-height` from `150px` to `290px` with padding `6px`.
+    - Styled custom scrollbar (`scrollbar-width: thin`, webkit scrollbar track and thumb) for smooth scrolling through extensive result lists.
+- **Multi-Stage Thumbnail Fallback System (`RoomSongThumbnail`)**:
+  - In [listening-room-panel.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/listening-room-panel.tsx):
+    - Created `RoomSongThumbnail` with pure derived state (tracking `failedUrl`).
+    - Cascades through:
+      1. Primary `song.thumbnail`
+      2. High-quality YouTube fallback: `https://i.ytimg.com/vi/${song.videoId}/hqdefault.jpg`
+      3. Medium-quality YouTube fallback: `https://i.ytimg.com/vi/${song.videoId}/mqdefault.jpg`
+      4. Fallback `<Music2 />` icon if all fail.
+    - Set `referrerPolicy="no-referrer"`, preventing hotlink blocking from YouTube CDN.
+    - Replaced raw `<img>` renders with `RoomSongThumbnail` across:
+      - Chat song suggestion cards.
+      - "NOW PLAYING IN ROOM" card.
+      - Queue search results list.
+      - Shared queue voting cards.
+
+### Verification
+- Frontend production build (`npm run build`) passed with zero errors.
+- Frontend lint (`npm run lint`) passed with zero errors and zero warnings.
+
+## 05/10/2026 — User-Account Room History Cloud Sync, Instant Chat Delivery & Scroll-Based Search Loading
+
+### User report & Requirements
+1. **User-Login-Based Room History (Cloud Persistence)**:
+   - Previously room history was stored solely in `localStorage`. If a user logged out, cleared cache, or signed in on another device or browser, their history was lost.
+   - Requirement: Room history (both created rooms and joined rooms) must be tied directly to the user's Supabase account so it persists across logouts and is automatically retrieved whenever they re-login in the future.
+2. **Instant Message Sending ("Ek baar mein hi send ho jaye")**:
+   - Sending chat messages previously waited on synchronous database insertion and multi-table queries before clearing the input or showing the message, causing UI delays, perceived unresponsiveness, and accidental double-clicks.
+   - Requirement: Messages must send immediately on the very first click/Enter press without delay or lag.
+3. **Scroll-Based Pagination for Search & Add to Queue**:
+   - When searching for songs in the room queue tab, results should load progressively as the user scrolls down the search results list (infinite scroll / load more on scroll), while maintaining the fixed clean container height.
+
+### Implemented changes
+- **User-Account Cloud Sync for Room History**:
+  - In [listening-room-context.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/context/listening-room-context.tsx):
+    - Added `mergeHistories(...)` to combine local storage, database rooms, and Supabase auth `user.user_metadata?.room_history` without duplicates.
+    - Added `syncRoomHistoryToSupabase(...)` calling `supabase.auth.updateUser({ data: { room_history: { created, joined } } })`.
+    - On user sign-in/mount, automatically loads `user.user_metadata?.room_history` (both `created` and `joined` rooms), merges with existing local history and Supabase `listening_rooms` table, and restores the full history.
+    - Updated `createRoom` and `joinRoom` to persist new history items to Supabase user metadata immediately.
+- **Instant Message Sending (Optimistic UI + Peer Broadcast)**:
+  - In [listening-room-context.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/context/listening-room-context.tsx):
+    - In `sendMessage`, creates an optimistic `RoomMessage` with temporary ID and appends it locally in **0 ms**.
+    - Dispatches a realtime broadcast (`{ event: "room_chat_message", payload: { message } }`) across the room channel so all connected peers receive and display the message instantly (<50 ms).
+    - Submits to Supabase `room_messages` in the background, updating the temporary ID with the database UUID upon completion.
+  - In [listening-room-panel.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/listening-room-panel.tsx):
+    - Added `isSubmittingRef` re-entrancy lock to prevent duplicate concurrent submissions.
+    - Clears `draft`, `reply`, and `emojiOpen` synchronously as soon as Submit/Enter is pressed, providing instant tactile feedback.
+- **Scroll-Based Search Pagination & Continuation Support**:
+  - In [main.py](file:///d:/Learn/InnerTube/music-app/backend/app/main.py):
+    - Updated `GET /api/search` to accept optional `continuation: str | None = Query(...)`, delegating to `service.music.browse(continuation=continuation)` when present.
+  - In [api.ts](file:///d:/Learn/InnerTube/music-app/frontend/src/lib/api.ts):
+    - Updated `musicApi.search(query, continuation, signal)` to pass the continuation token to the backend.
+  - In [listening-room-panel.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/listening-room-panel.tsx):
+    - Added `visibleCount`, `loadingMore`, and `queueContinuation` state.
+    - Initial search displays the first 10 tracks and captures the continuation token.
+    - Added `onScroll={handleQueueScroll}` to `.room-queue-search-results`. When the user scrolls within 60px of the bottom, it automatically expands the visible batch (+10 tracks) and triggers continuation fetching when needed.
+  - In [globals.css](file:///d:/Learn/InnerTube/music-app/frontend/src/app/globals.css):
+    - Added `.room-queue-loading-more` styling for smooth loading feedback during pagination.
+
+### Verification
+- Frontend production build (`npm run build`) passed with zero errors.
+- Frontend lint (`npm run lint`) passed with zero errors and zero warnings.
+
+## 05/10/2026 — Automatic Chat Scroll-to-Bottom on Entry & New Messages
+
+### User report & Requirements
+- **Automatic Scroll to Latest Chat**:
+  - Previously, when opening the listening room drawer or switching to the "Chat" tab, the scroll position remained at the top, requiring users to manually scroll down to read the latest messages.
+  - Requirement: Whenever any user opens the listening room or enters the Chat tab, automatically scroll to the bottom so the latest messages are immediately visible. Also smoothly scroll down when new incoming messages arrive or when sending a message.
+
+### Implemented changes
+- In [listening-room-panel.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/listening-room-panel.tsx):
+  - Added `messagesContainerRef` on `.room-messages` and `messagesEndRef` anchor at the bottom of the messages list.
+  - Created `scrollToBottom(behavior: "auto" | "smooth")` utility combining direct container `scrollTop = scrollHeight` and element `scrollIntoView({ block: "end" })`.
+  - Added effect triggered when `open && roomTab === "chat"` to immediately scroll to the bottom upon room opening or tab switching.
+  - Added effect when new messages arrive (`messages.length`) to smoothly scroll down to display the new message.
+  - Triggered instant smooth scroll down inside `submit()` when the user sends a message.
+- In [globals.css](file:///d:/Learn/InnerTube/music-app/frontend/src/app/globals.css):
+  - Added `scroll-behavior: smooth;` to `.room-messages` for natural scrolling transitions.
+
+### Verification
+- Frontend production build (`npm run build`) passed with zero errors.
+- Frontend lint (`npm run lint`) passed with zero errors and zero warnings.
+
+## 05/10/2026 — Rich 300+ Categorized Emoji Picker with Search & Click-Outside Auto-Close
+
+### User report & Requirements
+- **Comprehensive Emoji Picker (300+ Emojis)**:
+  - The chat composer previously had only 6 hardcoded static emojis in a small horizontal bar.
+  - Requirement: Provide a large collection of emojis across categories (Smileys, Gestures, Hearts, Music, Vibes, Animals, Food, Symbols) rather than just 5-10.
+- **Search Capability**:
+  - Allow users to quickly search and filter emojis by name/vibe keywords (e.g. "love", "fire", "party", "cry", "guitar").
+- **Outside Click Auto-Close**:
+  - When the emoji picker is open, clicking anywhere outside the picker popover or on the Escape key must automatically close the picker.
+
+### Implemented changes
+- Created [room-emoji-picker.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/room-emoji-picker.tsx):
+  - Built a lightweight, high-performance emoji picker containing 300+ popular and expressive emojis organized into 8 categories:
+    1. **Smileys & Emotions** (`😀`)
+    2. **Hands & Gestures** (`👋`)
+    3. **Hearts & Love** (`❤️`)
+    4. **Music & Party** (`🎵`)
+    5. **Vibes & Fire** (`🔥`)
+    6. **Animals** (`🐶`)
+    7. **Food & Drinks** (`🍕`)
+    8. **Symbols & Badges** (`✨`)
+  - Real-time search filter with keywords index and clear button.
+  - Click-outside detection using `mousedown` and `touchstart` listeners on `document`, referencing both the popover container and the trigger button to prevent toggle conflicts.
+  - Keyboard accessibility with `Escape` key close listener.
+- In [listening-room-panel.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/listening-room-panel.tsx):
+  - Replaced legacy static `.emoji-menu` with `<RoomEmojiPicker />`.
+  - Attached `emojiTriggerRef` to the `<button title="Emoji">` trigger button.
+  - Selecting an emoji appends to draft and automatically refocuses the message input.
+- In [globals.css](file:///d:/Learn/InnerTube/music-app/frontend/src/app/globals.css):
+  - Added modern glassmorphic styling for `.room-emoji-picker-popover`, category tab buttons, search bar, and 6-column responsive emoji grid with hover micro-animations.
+
+### Verification
+- Frontend production build (`npm run build`) passed with zero errors.
+- Frontend lint (`npm run lint`) passed with zero errors and zero warnings.
+
+
+
+
+
 

@@ -1,6 +1,7 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Copy, ListMusic, LogOut, MessageCircleMore, Music2, Plus, Reply, Search, Send, SmilePlus, ThumbsUp, Users, X } from "lucide-react";
 import { useListeningRoom, type RoomMessage } from "@/context/listening-room-context";
 import { usePlayer } from "@/context/player-context";
@@ -8,8 +9,56 @@ import { useAuth } from "@/context/auth-context";
 import { formatChatTime } from "@/lib/chat-time";
 import { musicApi } from "@/lib/api";
 import type { MediaItem } from "@/lib/types";
+import { RoomEmojiPicker } from "./room-emoji-picker";
 
 const emojis = ["❤️", "🔥", "😂", "👏", "🎵", "😍"];
+
+function RoomSongThumbnail({
+  song,
+  className = "",
+  alt = "",
+}: {
+  song?: MediaItem | null;
+  className?: string;
+  alt?: string;
+}) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+
+  const primarySrc = song?.thumbnail;
+  const fallbackHq = song?.videoId ? `https://i.ytimg.com/vi/${song.videoId}/hqdefault.jpg` : null;
+  const fallbackMq = song?.videoId ? `https://i.ytimg.com/vi/${song.videoId}/mqdefault.jpg` : null;
+
+  let currentSrc: string | null = null;
+  if (primarySrc && failedUrl !== primarySrc) {
+    currentSrc = primarySrc;
+  } else if (fallbackHq && failedUrl !== fallbackHq) {
+    currentSrc = fallbackHq;
+  } else if (fallbackMq && failedUrl !== fallbackMq) {
+    currentSrc = fallbackMq;
+  }
+
+  const handleError = () => {
+    if (currentSrc) {
+      setFailedUrl(currentSrc);
+    }
+  };
+
+  if (!currentSrc) {
+    return <Music2 className={className} />;
+  }
+
+  return (
+    <img
+      src={currentSrc}
+      alt={alt || song?.title || ""}
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      onError={handleError}
+      className={className}
+    />
+  );
+}
 
 export function ListeningRoomPanel() {
   const { user } = useAuth(); const player = usePlayer();
@@ -18,17 +67,54 @@ export function ListeningRoomPanel() {
   const [roomTab, setRoomTab] = useState<"chat" | "queue">("chat");
   const [queueSearch, setQueueSearch] = useState("");
   const [queueResults, setQueueResults] = useState<MediaItem[]>([]);
+  const [visibleCount, setVisibleCount] = useState(10);
+  const [queueContinuation, setQueueContinuation] = useState<string | null>(null);
   const [queueSearching, setQueueSearching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [code, setCode] = useState(""); const [name, setName] = useState("My listening room"); const [draft, setDraft] = useState("");
   const [reply, setReply] = useState<RoomMessage | null>(null); const [emojiOpen, setEmojiOpen] = useState(false);
   const [toast, setToast] = useState<{ title: string; body: string } | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const openRef = useRef(open);
+  const isSubmittingRef = useRef(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const emojiTriggerRef = useRef<HTMLButtonElement>(null);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior, block: "end" });
+    }
+  }, []);
 
   useEffect(() => {
     openRef.current = open;
   }, [open]);
+
+  // Always jump to latest message when panel opens or when user switches to chat tab
+  useEffect(() => {
+    if (open && roomTab === "chat" && roomState.room) {
+      scrollToBottom("auto");
+      const timer = setTimeout(() => {
+        scrollToBottom("auto");
+      }, 70);
+      return () => clearTimeout(timer);
+    }
+  }, [open, roomTab, roomState.room, scrollToBottom]);
+
+  // Smooth scroll to latest when new messages arrive while chat is open
+  useEffect(() => {
+    if (open && roomTab === "chat" && roomState.messages.length > 0) {
+      const timer = setTimeout(() => {
+        scrollToBottom("smooth");
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [open, roomTab, roomState.messages.length, scrollToBottom]);
 
   const effectiveUnread = open || !roomState.room ? 0 : unreadCount;
 
@@ -39,6 +125,8 @@ export function ListeningRoomPanel() {
       const timer = setTimeout(() => {
         if (!cancelled) {
           setQueueResults([]);
+          setVisibleCount(10);
+          setQueueContinuation(null);
           setQueueSearching(false);
         }
       }, 0);
@@ -54,7 +142,16 @@ export function ListeningRoomPanel() {
         .then((res) => {
           if (!cancelled) {
             const allItems = (res.shelves || []).flatMap((shelf) => shelf.items || []);
-            setQueueResults(allItems.filter((item) => Boolean(item.videoId)).slice(0, 5));
+            const seen = new Set<string>();
+            const playableSongs = allItems.filter((item) => {
+              const id = item.videoId || item.id;
+              if (!id || seen.has(id)) return false;
+              seen.add(id);
+              return Boolean(item.videoId);
+            });
+            setQueueResults(playableSongs);
+            setVisibleCount(Math.min(10, playableSongs.length));
+            setQueueContinuation(res.continuation || null);
             setQueueSearching(false);
           }
         })
@@ -67,6 +164,38 @@ export function ListeningRoomPanel() {
       clearTimeout(timer);
     };
   }, [queueSearch]);
+
+  const handleQueueScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 60 && !loadingMore && !queueSearching) {
+      if (visibleCount < queueResults.length) {
+        setVisibleCount((prev) => Math.min(prev + 10, queueResults.length));
+      } else if (queueContinuation && queueSearch.trim()) {
+        setLoadingMore(true);
+        musicApi
+          .search(queueSearch, queueContinuation)
+          .then((res) => {
+            const nextItems = (res.shelves || []).flatMap((shelf) => shelf.items || []);
+            const seen = new Set(queueResults.map((item) => item.videoId || item.id));
+            const newSongs = nextItems.filter((item) => {
+              const id = item.videoId || item.id;
+              if (!id || seen.has(id)) return false;
+              seen.add(id);
+              return Boolean(item.videoId);
+            });
+            if (newSongs.length > 0) {
+              setQueueResults((prev) => [...prev, ...newSongs]);
+              setVisibleCount((prev) => prev + Math.min(10, newSongs.length));
+            }
+            setQueueContinuation(res.continuation || null);
+            setLoadingMore(false);
+          })
+          .catch(() => {
+            setLoadingMore(false);
+          });
+      }
+    }
+  };
 
   const mentionQuery = draft.match(/(?:^|\s)@([\w.-]*)$/)?.[1]?.toLowerCase();
   const mentionMatches = useMemo(() => mentionQuery === undefined ? [] : roomState.members.filter((member) => member.userId !== user?.id && member.name.toLowerCase().includes(mentionQuery)).slice(0, 5), [mentionQuery, roomState.members, user?.id]);
@@ -92,8 +221,41 @@ export function ListeningRoomPanel() {
   function addMention(memberName: string) {
     setDraft((value) => value.replace(/@([\w.-]*)$/, `@${memberName.replace(/\s+/g, "_")} `)); inputRef.current?.focus();
   }
-  async function submit() { if (await roomState.sendMessage(draft, reply?.id)) { setDraft(""); setReply(null); setEmojiOpen(false); } }
-  async function suggestSong() { if (player.current) await roomState.sendMessage("Suggested this song", reply?.id, player.current); }
+
+  async function submit() {
+    const text = draft.trim();
+    if (!text && !reply) return;
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+    const currentReplyId = reply?.id || null;
+    // Clear immediately for 0 ms UI response
+    setDraft("");
+    setReply(null);
+    setEmojiOpen(false);
+    inputRef.current?.focus();
+    setTimeout(() => scrollToBottom("smooth"), 0);
+    try {
+      const ok = await roomState.sendMessage(text, currentReplyId);
+      if (!ok) {
+        setDraft(text);
+      }
+    } finally {
+      isSubmittingRef.current = false;
+    }
+  }
+
+  async function suggestSong() {
+    if (player.current && !isSubmittingRef.current) {
+      isSubmittingRef.current = true;
+      const currentReplyId = reply?.id || null;
+      setReply(null);
+      try {
+        await roomState.sendMessage("Suggested this song", currentReplyId, player.current);
+      } finally {
+        isSubmittingRef.current = false;
+      }
+    }
+  }
 
   return <>
     {toast && <button className="room-toast" onClick={() => { setOpen(true); setUnreadCount(0); setToast(null); }}><MessageCircleMore /><span><b>{toast.title}</b><small>{toast.body}</small></span><X onClick={(event) => { event.stopPropagation(); setToast(null); }} /></button>}
@@ -184,7 +346,7 @@ export function ListeningRoomPanel() {
         </div> : <>
           <div className="room-meta"><button onClick={() => void navigator.clipboard.writeText(roomState.room!.code)} title="Copy room code"><b>{roomState.room.code}</b><Copy /></button><span className={roomState.connected ? "online" : ""}>{roomState.connected ? "Live" : "Connecting"}</span><button className="room-leave" onClick={() => void roomState.leaveRoom()}><LogOut />Leave</button></div>
           <div className="room-members">{roomState.members.map((member) => <span key={member.userId} title={`${member.name} • ${member.role}`} className={member.online ? "online" : ""}>{member.name.slice(0, 1).toUpperCase()}</span>)}</div>
-          
+
           <div className="room-nav-tabs">
             <button
               className={`room-nav-btn ${roomTab === "chat" ? "active" : ""}`}
@@ -207,7 +369,7 @@ export function ListeningRoomPanel() {
 
           {roomTab === "chat" ? (
             <>
-              <div className="room-messages">
+              <div className="room-messages" ref={messagesContainerRef}>
                 {roomState.messages.map((message) => {
                   const parent = message.reply_to ? messageMap.get(message.reply_to) : null;
                   const grouped = [...new Set(message.reactions.map((reaction) => reaction.emoji))];
@@ -219,7 +381,7 @@ export function ListeningRoomPanel() {
                       {message.song && (
                         <div className="room-song-wrapper">
                           <button className="room-song" onClick={() => player.play(message.song!, [])}>
-                            {message.song.thumbnail ? <img src={message.song.thumbnail} alt="" /> : <Music2 />}
+                            <RoomSongThumbnail song={message.song} />
                             <span><b>{message.song.title}</b><small>{message.song.artists.join(", ") || message.song.subtitle}</small></span>
                             <i>▶</i>
                           </button>
@@ -237,18 +399,35 @@ export function ListeningRoomPanel() {
                         </div>
                       )}
                       {!!grouped.length && <div className="room-reactions">{grouped.map((emoji) => <button key={emoji} onClick={() => void roomState.toggleReaction(message.id, emoji)}>{emoji} {message.reactions.filter((item) => item.emoji === emoji).length}</button>)}</div>}
-                      <div className="room-message-actions"><button onClick={() => { setReply(message); inputRef.current?.focus(); }}><Reply />Reply</button>{emojis.slice(0, 4).map((emoji) => <button key={emoji} onClick={() => void roomState.toggleReaction(message.id, emoji)}>{emoji}</button>)}</div>
+                      <div className="room-message-actions"><div className="reply-btn"><button onClick={() => { setReply(message); inputRef.current?.focus(); }}><Reply />Reply</button></div>&nbsp;{emojis.slice(0, 4).map((emoji) => <button key={emoji} onClick={() => void roomState.toggleReaction(message.id, emoji)}>{emoji}</button>)}</div>
                     </article>
                   );
                 })}
                 {!roomState.messages.length && <div className="room-empty"><MessageCircleMore /><p>Say hello. Everyone in the room will see it instantly.</p></div>}
+                <div ref={messagesEndRef} />
               </div>
               <footer className="room-composer">
                 {reply && <div className="room-replying"><span>Replying to <b>{reply.senderName}</b></span><button onClick={() => setReply(null)}><X /></button></div>}
                 {!!mentionMatches.length && <div className="mention-menu">{mentionMatches.map((member) => <button key={member.userId} onClick={() => addMention(member.name)}>@{member.name.replace(/\s+/g, "_")}</button>)}</div>}
-                {emojiOpen && <div className="emoji-menu">{emojis.map((emoji) => <button key={emoji} onClick={() => setDraft((value) => value + emoji)}>{emoji}</button>)}</div>}
+                {emojiOpen && (
+                  <RoomEmojiPicker
+                    onSelect={(emoji) => {
+                      setDraft((value) => value + emoji);
+                      inputRef.current?.focus();
+                    }}
+                    onClose={() => setEmojiOpen(false)}
+                    triggerRef={emojiTriggerRef}
+                  />
+                )}
                 <div>
-                  <button title="Emoji" onClick={() => setEmojiOpen((value) => !value)}><SmilePlus /></button>
+                  <button
+                    ref={emojiTriggerRef}
+                    title="Emoji"
+                    type="button"
+                    onClick={() => setEmojiOpen((value) => !value)}
+                  >
+                    <SmilePlus />
+                  </button>
                   <button title="Suggest current song" disabled={!player.current} onClick={() => void suggestSong()}><Music2 /></button>
                   <input ref={inputRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder="Message the room…" maxLength={2000} />
                   <button className="send" disabled={!draft.trim()} onClick={() => void submit()}><Send /></button>
@@ -264,7 +443,7 @@ export function ListeningRoomPanel() {
                     <span className="live-pill">LIVE</span>
                   </div>
                   <div className="room-queue-now-card">
-                    {player.current.thumbnail ? <img src={player.current.thumbnail} alt="" /> : <Music2 />}
+                    <RoomSongThumbnail song={player.current} />
                     <div className="room-queue-now-meta">
                       <b>{player.current.title}</b>
                       <small>{player.current.artists?.join(", ") || player.current.subtitle}</small>
@@ -289,10 +468,10 @@ export function ListeningRoomPanel() {
                 </div>
                 {queueSearching && <div className="room-queue-searching">Searching tracks…</div>}
                 {queueResults.length > 0 && (
-                  <div className="room-queue-search-results">
-                    {queueResults.map((song) => (
+                  <div className="room-queue-search-results" onScroll={handleQueueScroll}>
+                    {queueResults.slice(0, visibleCount).map((song) => (
                       <div key={song.id} className="room-queue-result-item">
-                        {song.thumbnail ? <img src={song.thumbnail} alt="" /> : <Music2 />}
+                        <RoomSongThumbnail song={song} />
                         <div className="room-queue-result-meta">
                           <b>{song.title}</b>
                           <small>{song.artists?.join(", ") || song.subtitle}</small>
@@ -303,6 +482,8 @@ export function ListeningRoomPanel() {
                             roomState.addToRoomQueue(song);
                             setQueueSearch("");
                             setQueueResults([]);
+                            setQueueContinuation(null);
+                            setVisibleCount(10);
                           }}
                           title="Add to queue"
                         >
@@ -311,6 +492,11 @@ export function ListeningRoomPanel() {
                         </button>
                       </div>
                     ))}
+                    {loadingMore && (
+                      <div className="room-queue-loading-more">
+                        <span>Loading more tracks…</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -337,7 +523,7 @@ export function ListeningRoomPanel() {
                           {isTop ? "★ TOP" : `#${index + 1}`}
                         </span>
                         <div className="room-queue-thumb">
-                          {item.song.thumbnail ? <img src={item.song.thumbnail} alt="" /> : <Music2 />}
+                          <RoomSongThumbnail song={item.song} />
                         </div>
                         <div className="room-queue-info">
                           <b>{item.song.title}</b>

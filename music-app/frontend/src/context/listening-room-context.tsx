@@ -49,6 +49,35 @@ type ListeningRoomContextValue = {
 const ListeningRoomContext = createContext<ListeningRoomContextValue | null>(null);
 const createId = () => typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 
+function mergeHistories(...lists: (RoomHistoryItem[] | undefined | null)[]): RoomHistoryItem[] {
+  const map = new Map<string, RoomHistoryItem>();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (!item || !item.code) continue;
+      const existing = map.get(item.code);
+      if (!existing || new Date(item.timestamp).getTime() > new Date(existing.timestamp).getTime()) {
+        map.set(item.code, item);
+      }
+    }
+  }
+  return Array.from(map.values())
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 30);
+}
+
+function syncRoomHistoryToSupabase(user: { id: string } | null, created: RoomHistoryItem[], joined: RoomHistoryItem[]) {
+  if (!user) return;
+  void supabase.auth.updateUser({
+    data: {
+      room_history: {
+        created: created.slice(0, 30),
+        joined: joined.slice(0, 30),
+      },
+    },
+  }).catch(() => { /* ignore */ });
+}
+
 function getStoredHistory(key: string): RoomHistoryItem[] {
   if (typeof window === "undefined") return [];
   try {
@@ -97,6 +126,10 @@ export function ListeningRoomProvider({ children }: { children: ReactNode }) {
   const isLiveRef = useRef(true);
   const hasRestoredRef = useRef(false);
 
+  const createdRoomsHistoryRef = useRef<RoomHistoryItem[]>([]);
+  const joinedRoomsHistoryRef = useRef<RoomHistoryItem[]>([]);
+  useEffect(() => { createdRoomsHistoryRef.current = createdRoomsHistory; }, [createdRoomsHistory]);
+  useEffect(() => { joinedRoomsHistoryRef.current = joinedRoomsHistory; }, [joinedRoomsHistory]);
   useEffect(() => { roomQueueRef.current = roomQueue; }, [roomQueue]);
   useEffect(() => { isLiveRef.current = isLive; }, [isLive]);
   useEffect(() => { playerRef.current = player; }, [player]);
@@ -105,7 +138,7 @@ export function ListeningRoomProvider({ children }: { children: ReactNode }) {
   const isHost = Boolean(room && user && room.host_id === user.id);
   const isInRoom = Boolean(room);
 
-  // Sync / load rooms history for authenticated user
+  // Sync / load rooms history for authenticated user (LocalStorage + Supabase user metadata + DB)
   useEffect(() => {
     let isMounted = true;
     if (!user) {
@@ -119,10 +152,25 @@ export function ListeningRoomProvider({ children }: { children: ReactNode }) {
     }
     const createdKey = `innerwave-created-rooms:${user.id}`;
     const joinedKey = `innerwave-joined-rooms:${user.id}`;
+
+    const localCreated = getStoredHistory(createdKey);
+    const localJoined = getStoredHistory(joinedKey);
+
+    const userMetaHistory = user.user_metadata?.room_history as { created?: RoomHistoryItem[]; joined?: RoomHistoryItem[] } | undefined;
+    const metaCreated = Array.isArray(userMetaHistory?.created) ? userMetaHistory.created : [];
+    const metaJoined = Array.isArray(userMetaHistory?.joined) ? userMetaHistory.joined : [];
+
+    const mergedCreated = mergeHistories(localCreated, metaCreated);
+    const mergedJoined = mergeHistories(localJoined, metaJoined);
+
     queueMicrotask(() => {
       if (isMounted) {
-        setCreatedRoomsHistory(getStoredHistory(createdKey));
-        setJoinedRoomsHistory(getStoredHistory(joinedKey));
+        setCreatedRoomsHistory(mergedCreated);
+        setJoinedRoomsHistory(mergedJoined);
+        try {
+          localStorage.setItem(createdKey, JSON.stringify(mergedCreated));
+          localStorage.setItem(joinedKey, JSON.stringify(mergedJoined));
+        } catch { /* ignore */ }
       }
     });
 
@@ -134,28 +182,26 @@ export function ListeningRoomProvider({ children }: { children: ReactNode }) {
       .limit(30)
       .then(({ data: dbRooms }) => {
         if (!isMounted || !dbRooms || dbRooms.length === 0) return;
+        const dbItems: RoomHistoryItem[] = dbRooms.map((r) => ({
+          id: r.id,
+          code: r.code,
+          name: r.name,
+          timestamp: r.created_at,
+        }));
         setCreatedRoomsHistory((current) => {
-          const map = new Map<string, RoomHistoryItem>();
-          current.forEach((item) => map.set(item.code, item));
-          dbRooms.forEach((r) => {
-            if (!map.has(r.code)) {
-              map.set(r.code, {
-                id: r.id,
-                code: r.code,
-                name: r.name,
-                timestamp: r.created_at,
-              });
-            }
-          });
-          const merged = Array.from(map.values())
-            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-            .slice(0, 30);
+          const finalCreated = mergeHistories(current, dbItems);
           try {
-            localStorage.setItem(createdKey, JSON.stringify(merged));
+            localStorage.setItem(createdKey, JSON.stringify(finalCreated));
           } catch { /* ignore */ }
-          return merged;
+          syncRoomHistoryToSupabase(user, finalCreated, mergedJoined);
+          return finalCreated;
         });
       });
+
+    if (mergedCreated.length > metaCreated.length || mergedJoined.length > metaJoined.length) {
+      syncRoomHistoryToSupabase(user, mergedCreated, mergedJoined);
+    }
+
     return () => { isMounted = false; };
   }, [user]);
 
@@ -322,6 +368,22 @@ export function ListeningRoomProvider({ children }: { children: ReactNode }) {
             },
           }));
         }
+      }
+    }).on("broadcast", { event: "room_chat_message" }, ({ payload }: { payload: { message: RoomMessage } }) => {
+      const incoming = payload?.message;
+      if (!incoming || incoming.room_id !== nextRoom.id) return;
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === incoming.id)) return prev;
+        return [...prev, incoming];
+      });
+      if (incoming.sender_id !== user.id) {
+        const detail = {
+          title: incoming.senderName || "InnerWave room",
+          body: incoming.song ? `🎵 ${incoming.song.title}` : incoming.body,
+          roomId: nextRoom.id,
+          count: 1,
+        };
+        window.dispatchEvent(new CustomEvent("innerwave-room-notification", { detail }));
       }
     }).on("postgres_changes", { event: "*", schema: "public", table: "room_messages", filter: `room_id=eq.${nextRoom.id}` }, refreshAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "message_reactions" }, refreshAll)
@@ -676,6 +738,7 @@ export function ListeningRoomProvider({ children }: { children: ReactNode }) {
     setCreatedRoomsHistory(updated);
     if (user) {
       localStorage.setItem(`innerwave-active-room:${user.id}`, JSON.stringify({ id: created.id, code: created.code, name: created.name, host_id: created.host_id }));
+      syncRoomHistoryToSupabase(user, updated, joinedRoomsHistoryRef.current);
     }
     await attach(created);
     return true;
@@ -702,10 +765,12 @@ export function ListeningRoomProvider({ children }: { children: ReactNode }) {
       const storageKey = `innerwave-created-rooms:${user?.id || "guest"}`;
       const updated = saveHistoryItem(storageKey, historyItem);
       setCreatedRoomsHistory(updated);
+      if (user) syncRoomHistoryToSupabase(user, updated, joinedRoomsHistoryRef.current);
     } else {
       const storageKey = `innerwave-joined-rooms:${user?.id || "guest"}`;
       const updated = saveHistoryItem(storageKey, historyItem);
       setJoinedRoomsHistory(updated);
+      if (user) syncRoomHistoryToSupabase(user, createdRoomsHistoryRef.current, updated);
     }
     if (user) {
       localStorage.setItem(`innerwave-active-room:${user.id}`, JSON.stringify({ id: joined.id, code: joined.code, name: joined.name, host_id: joined.host_id }));
@@ -729,11 +794,57 @@ export function ListeningRoomProvider({ children }: { children: ReactNode }) {
 
   const sendMessage = useCallback(async (body: string, replyTo: string | null = null, song: MediaItem | null = null) => {
     if (!room || !user || (!body.trim() && !song)) return false;
-    const { error: sendError } = await supabase.from("room_messages").insert({ room_id: room.id, sender_id: user.id, body: body.trim(), reply_to: replyTo, song });
-    if (sendError) { setError(sendError.message); return false; }
-    await refreshMessages(room.id);
-    return true;
-  }, [refreshMessages, room, user]);
+    const trimmed = body.trim();
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const optimisticMessage: RoomMessage = {
+      id: tempId,
+      room_id: room.id,
+      sender_id: user.id,
+      senderName: displayName || "Listener",
+      body: trimmed,
+      reply_to: replyTo,
+      song,
+      created_at: new Date().toISOString(),
+      reactions: [],
+    };
+
+    // 1. Instant local append (0 ms)
+    setMessages((prev) => [...prev, optimisticMessage]);
+
+    // 2. Instant broadcast to room members
+    if (channelRef.current) {
+      void channelRef.current.send({
+        type: "broadcast",
+        event: "room_chat_message",
+        payload: { message: optimisticMessage },
+      });
+    }
+
+    // 3. Persist to database in background
+    try {
+      const { data, error: sendError } = await supabase
+        .from("room_messages")
+        .insert({ room_id: room.id, sender_id: user.id, body: trimmed, reply_to: replyTo, song })
+        .select("id, created_at")
+        .single();
+
+      if (sendError) {
+        setError(sendError.message);
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        return false;
+      }
+
+      if (data?.id) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === tempId ? { ...m, id: data.id, created_at: data.created_at || m.created_at } : m))
+        );
+      }
+      return true;
+    } catch {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      return false;
+    }
+  }, [displayName, room, user]);
 
   const toggleReaction = useCallback(async (messageId: string, emoji: string) => {
     if (!user || !room) return;

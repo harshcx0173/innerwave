@@ -27,8 +27,11 @@ function withAbort<T>(request: Promise<T>, signal?: AbortSignal): Promise<T> {
 
 export const musicApi = {
   home: (signal?: AbortSignal) => getJson<Feed>("/api/home", signal),
-  search: (query: string, signal?: AbortSignal) =>
-    getJson<Feed>(`/api/search?q=${encodeURIComponent(query)}`, signal),
+  search: (query: string, continuation?: string | null, signal?: AbortSignal) =>
+    getJson<Feed>(
+      `/api/search?q=${encodeURIComponent(query)}${continuation ? `&continuation=${encodeURIComponent(continuation)}` : ""}`,
+      signal,
+    ),
   browse: (id: string, params?: string | null, signal?: AbortSignal) =>
     getJson<Feed>(
       `/api/browse?id=${encodeURIComponent(id)}${params ? `&params=${encodeURIComponent(params)}` : ""}`,

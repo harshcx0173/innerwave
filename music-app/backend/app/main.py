@@ -279,9 +279,15 @@ def home() -> dict:
 
 
 @app.get("/api/search")
-def search(q: str = Query(min_length=1, max_length=120)) -> dict:
+def search(
+    q: str = Query(min_length=1, max_length=120),
+    continuation: str | None = Query(default=None, max_length=2000),
+) -> dict:
     try:
-        result = parse_feed(service.search(q.strip()))
+        if continuation:
+            result = parse_feed(service.music.browse(continuation=continuation))
+        else:
+            result = parse_feed(service.search(q.strip()))
         result["query"] = q.strip()
         return result
     except Exception as exc:
