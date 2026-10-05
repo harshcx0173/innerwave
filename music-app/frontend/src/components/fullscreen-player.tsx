@@ -8,6 +8,7 @@ import { usePlaylist } from "@/context/playlist-context";
 import { MediaArt } from "./media-art";
 import { Seekbar } from "./seekbar";
 import { AudioVisualizer } from "./audio-visualizer";
+import { ArtistSubtitle } from "./artist-subtitle";
 
 export function FullscreenPlayer() {
   const player = usePlayer();
@@ -31,8 +32,6 @@ export function FullscreenPlayer() {
       player.toggle();
     }
   };
-
-  const artist = player.current.artists[0] || player.current.subtitle.split(" · ")[0];
 
   return (
     <section className="fullscreen-player with-queue">
@@ -80,20 +79,14 @@ export function FullscreenPlayer() {
         )}
         <div className="fullscreen-meta">
           <h1>{player.current.title}</h1>
-          {artist ? (
-            <p
-              onClick={() => {
-                player.toggleFullscreen();
-                player.openArtistView(artist);
-              }}
-              className="cursor-pointer hover:underline hover:text-cyan-400 transition"
-              title={`View ${artist}`}
-            >
-              {player.current.subtitle || artist}
-            </p>
-          ) : (
-            <p>{player.current.subtitle}</p>
-          )}
+          <ArtistSubtitle
+            item={player.current}
+            className="text-base text-white/70"
+            onArtistClick={(artistName) => {
+              player.toggleFullscreen();
+              player.openArtistView(artistName);
+            }}
+          />
         </div>
         <Seekbar currentTime={player.currentTime} duration={player.duration} buffered={player.buffered} onSeek={player.seek} large />
         <div className="fullscreen-controls">

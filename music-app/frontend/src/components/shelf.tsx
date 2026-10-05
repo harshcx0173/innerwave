@@ -5,6 +5,7 @@ import type { MediaItem, Shelf as ShelfType } from "@/lib/types";
 import { MediaArt } from "./media-art";
 import { usePlaylist } from "@/context/playlist-context";
 import { usePlayer } from "@/context/player-context";
+import { ArtistSubtitle } from "./artist-subtitle";
 
 type Props = {
   shelf: ShelfType;
@@ -27,7 +28,6 @@ export function Shelf({ shelf, onSelect, onPlayAll }: Props) {
         </header>
         <div className="result-list">
           {shelf.items.map((item, index) => {
-            const artist = item.artists[0] || item.subtitle.split(" · ")[0];
             return (
               <div
                 key={`${item.id}-${index}`}
@@ -43,19 +43,7 @@ export function Shelf({ shelf, onSelect, onPlayAll }: Props) {
                     <strong className="truncate group-hover:text-cyan-400 transition">
                       {item.title}
                     </strong>
-                    {artist && item.videoId ? (
-                      <small
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          player.openArtistView(artist);
-                        }}
-                        className="truncate hover:underline hover:text-cyan-400 transition"
-                      >
-                        {item.subtitle || artist}
-                      </small>
-                    ) : (
-                      <small className="truncate">{item.subtitle || item.type}</small>
-                    )}
+                    <ArtistSubtitle item={item} />
                   </span>
                 </div>
 
@@ -124,7 +112,7 @@ export function Shelf({ shelf, onSelect, onPlayAll }: Props) {
                   <strong className="truncate group-hover:text-cyan-400 transition">
                     {item.title}
                   </strong>
-                  <small className="truncate">{item.subtitle}</small>
+                  <ArtistSubtitle item={item} />
                 </span>
               </div>
               <div className="flex items-center gap-1 shrink-0">

@@ -191,7 +191,8 @@ def parse_item(wrapper: Any) -> dict[str, Any] | None:
         if parts and parts[0].lower() in {"song", "video", "album", "single", "ep", "playlist", "artist"}:
             parts = parts[1:]
         primary = parts[0] if parts else subtitle
-        artists = [part.strip() for part in primary.split(",") if part.strip()]
+        raw_artists = re.split(r",\s*|\s+&\s+|\s+and\s+|\s+feat\.?\s+|\s+ft\.?\s+", primary, flags=re.IGNORECASE)
+        artists = [part.strip() for part in raw_artists if part.strip()]
 
     return {
         "id": identity,

@@ -22,6 +22,7 @@ import { usePlayer } from "@/context/player-context";
 import { usePlaylist } from "@/context/playlist-context";
 import type { MediaItem, Shelf as ShelfType } from "@/lib/types";
 import { MediaArt } from "./media-art";
+import { ArtistSubtitle } from "./artist-subtitle";
 
 type Props = {
   artistName: string;
@@ -335,9 +336,7 @@ export function ArtistPage({ artistName, onBack }: Props) {
                       <p className="text-sm font-semibold text-white group-hover:text-cyan-400 truncate">
                         {track.title}
                       </p>
-                      <p className="text-xs text-white/50 truncate mt-0.5">
-                        {track.subtitle || artistName}
-                      </p>
+                      <ArtistSubtitle item={track} className="text-xs text-white/50 truncate mt-0.5" />
                     </div>
                   </div>
 

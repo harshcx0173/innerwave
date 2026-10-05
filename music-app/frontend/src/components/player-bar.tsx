@@ -8,6 +8,7 @@ import { usePlaylist } from "@/context/playlist-context";
 import { MediaArt } from "./media-art";
 import { Seekbar } from "./seekbar";
 import { PlayerSettingsModal } from "./player-settings-modal";
+import { ArtistSubtitle } from "./artist-subtitle";
 
 export function PlayerBar() {
   const player = usePlayer();
@@ -30,8 +31,6 @@ export function PlayerBar() {
     }
   };
 
-  const artist = current?.artists[0] || current?.subtitle.split(" · ")[0];
-
   return (
     <>
       <footer className={`player-bar ${current ? "visible" : ""}`}>
@@ -41,18 +40,12 @@ export function PlayerBar() {
           ) : (
             <div className="size-14 rounded-xl bg-white/5" />
           )}
-          <span className="item-copy">
+          <span className="item-copy min-w-0">
             <strong>{current?.title || "Choose something to play"}</strong>
-            {artist ? (
-              <small
-                onClick={() => player.openArtistView(artist)}
-                className="cursor-pointer hover:underline hover:text-cyan-400 transition"
-                title={`View ${artist}`}
-              >
-                {current?.subtitle || artist}
-              </small>
+            {current ? (
+              <ArtistSubtitle item={current} />
             ) : (
-              <small>{current?.subtitle || "Your music will appear here"}</small>
+              <small>Your music will appear here</small>
             )}
           </span>
           {current && (
