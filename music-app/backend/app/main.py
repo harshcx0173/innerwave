@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from .parser import parse_chips, parse_feed, parse_lyrics, parse_suggestions, parse_watch_tabs
+from .recommendations import rank_queue, recommendation_queries
 from .service import service
 
 
@@ -181,7 +182,8 @@ def upstream_error(exc: Exception) -> HTTPException:
 
 
 def _recommendation_seed(video_id: str, title: str, artist: str) -> tuple[str, str]:
-    if title.strip():
+    clean_artist = artist.strip()
+    if title.strip() and clean_artist.casefold() not in {"", "song", "video", "single"}:
         return title.strip(), artist.strip()
     parsed = parse_feed(service.search(video_id))
     candidates = [
@@ -197,7 +199,9 @@ def _recommendation_seed(video_id: str, title: str, artist: str) -> tuple[str, s
     resolved_artist = ", ".join(str(value) for value in artists if value) if isinstance(artists, list) else ""
     if not resolved_artist:
         resolved_artist = str(seed.get("subtitle") or "").split(" · ")[0]
-    return str(seed.get("title") or video_id), artist.strip() or resolved_artist
+    resolved_title = title.strip() or str(seed.get("title") or video_id)
+    supplied_artist = clean_artist if clean_artist.casefold() not in {"song", "video", "single"} else ""
+    return resolved_title, supplied_artist or resolved_artist
 
 
 def _search_recommendations(video_id: str, title: str, artist: str, *, limit: int = 50) -> list[dict]:
@@ -209,29 +213,35 @@ def _search_recommendations(video_id: str, title: str, artist: str, *, limit: in
     still receive a queue seeded by the song rather than by the visible shelf.
     """
     title, artist = _recommendation_seed(video_id, title, artist)
-    queries = [
-        " ".join(part for part in (title, artist, "songs radio") if part),
-        " ".join(part for part in (artist, "popular songs") if part),
-        f"songs like {title}",
-    ]
-    items: list[dict] = []
-    seen: set[str] = {video_id}
+    queries = recommendation_queries(title, artist)
+    pools: list[list[dict]] = []
     last_error: Exception | None = None
-    for query in dict.fromkeys(queries):
+    for query in queries:
         try:
             parsed = parse_feed(service.search(query))
         except Exception as exc:
             last_error = exc
             continue
+        pool: list[dict] = []
+        pool_seen: set[str] = set()
         for shelf in parsed["shelves"]:
             for item in shelf["items"]:
                 item_id = str(item.get("videoId") or item.get("id") or "")
-                if not item.get("videoId") or not item_id or item_id in seen:
+                if not item.get("videoId") or not item_id or item_id in pool_seen:
                     continue
-                seen.add(item_id)
-                items.append(item)
-                if len(items) >= limit:
-                    return items
+                pool_seen.add(item_id)
+                pool.append(item)
+        if pool:
+            pools.append(pool)
+
+    # Interleave query pools before ranking so one search phrase cannot dominate
+    # all available candidate slots.
+    candidates: list[dict] = []
+    for position in range(max((len(pool) for pool in pools), default=0)):
+        for pool in pools:
+            if position < len(pool):
+                candidates.append(pool[position])
+    items = rank_queue(candidates, video_id=video_id, title=title, artist=artist, limit=limit)
     if not items and last_error:
         raise last_error
     return items
@@ -315,13 +325,26 @@ def next_tracks(
     radio_error: Exception | None = None
     try:
         result = parse_feed(service.next(videoId, playlistId, params=params, index=index, continuation=continuation))
-        queue = next((shelf["items"] for shelf in result["shelves"] if shelf["items"]), [])
+        raw_queue = next((shelf["items"] for shelf in result["shelves"] if shelf["items"]), [])
+        queue = rank_queue(raw_queue, video_id=videoId or "", title=title, artist=artist)
         if queue:
+            # A badly polluted or duplicate-heavy upstream radio is supplemented
+            # by the content ranker instead of being returned as-is.
+            source = "youtube-radio"
+            if not continuation and videoId and len(queue) < 12:
+                fallback = _search_recommendations(videoId, title, artist)
+                queue = rank_queue(
+                    [*queue, *fallback],
+                    video_id=videoId,
+                    title=title,
+                    artist=artist,
+                )
+                source = "youtube-radio+ranked-search"
             return {
                 "items": queue,
                 "shelves": result["shelves"],
                 "continuation": result["continuation"],
-                "source": "youtube-radio",
+                "source": source,
             }
         radio_error = RuntimeError("YouTube Music returned an empty radio queue")
     except Exception as exc:

@@ -38,7 +38,7 @@ export function Topbar({ query, setQuery, onSearch, userName, onOpenProfile }: P
       <div className="history-buttons"><button aria-label="Back"><ChevronLeft /></button><button aria-label="Forward"><ChevronRight /></button></div>
       <form onSubmit={submit} className="search-box">
         <Search size={18} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search songs, artists, albums..." aria-label="Search music" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search songs, albums, artists, podcasts" aria-label="Search music" />
         {query && <button type="button" onClick={() => setQuery("")}><X size={16} /></button>}
         <kbd>⌘ K</kbd>
       </form>

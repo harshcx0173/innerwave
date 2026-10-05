@@ -739,3 +739,76 @@ The Supabase CLI is not installed and no Supabase management access token/databa
 - When permission is revoked or location services are disabled, stale coordinates are cleared and the next heartbeat falls back to server-captured IP.
 - Backend upsert overwrites the same user/device row, so the admin panel changes from IP fallback back to GPS without logout/relogin.
 - Frontend ESLint and production build passed. Flutter focused analyzer passed with zero issues and Flutter tests passed 3/3.
+
+## Industry-style song-radio queue ranking — 2026-10-05 11:37:53 +05:30
+
+### User report
+
+- Song radio had become duplicate-heavy. For `Vaaroon Forever (From “Mirzapur The Movie”)`, Up Next mostly contained alternate uploads of the same Vaaroon track.
+- Other seeds could incorrectly surface podcasts or unrelated devotional content.
+- The same queue quality is required on web and mobile.
+
+### Root cause
+
+- When YouTube Music watch-next is throttled on Render, the backend search fallback concatenated raw search results without relevance ranking, content-category checks, recording-family deduplication, or artist diversity.
+- Web continuation requests omitted seed metadata, so later pages could not be evaluated against the current song.
+- Mobile retained the previous queue response in its 30-minute disk cache.
+
+### Implemented changes
+
+- Added `backend/app/recommendations.py`, a deterministic hybrid content-based ranker shared by all clients through the backend API.
+- Added seed-aware filtering for podcasts, episodes, audiobooks, unrelated bhajans/mantras/aartis, long-form content, compilations, jukeboxes, status/short videos, and poor-quality variants.
+- Devotional and podcast content remains allowed when the current seed itself belongs to that category.
+- Added same-recording-family detection so lyric, reprise, official-video, alternate-upload, and shortened-title forms of the current song do not fill the queue.
+- Added candidate deduplication, per-artist diversity limits, seed-artist limits, upstream-quality weighting, duration quality signals, and variant penalties.
+- Search fallback now uses artist radio, artist-popular, and movie/soundtrack context queries, interleaves their candidate pools, then ranks them instead of concatenating one query at a time.
+- Native YouTube Music radio responses are also sanitized. A polluted/short native radio is supplemented with ranked fallback candidates.
+- Web continuation calls now always send the current seed video/title/artist metadata.
+- Mobile queue cache was bumped from `queue_v2` to `queue_v3`, immediately invalidating old bad queues without clearing all app data.
+- Related-tab results also benefit because they use the same ranked fallback function.
+
+### Verification
+
+- Backend recommendation and next-queue tests: 11/11 passed.
+- Frontend ESLint passed.
+- Flutter analyzer for `lib/core/api/music_api.dart` passed with zero issues.
+- A live YouTube Music candidate run for the reported Vaaroon seed returned a music-only mixed queue; Vaaroon duplicates, podcasts, bhajans, long-form items, and compilation uploads were filtered.
+- `git diff --check` passed; only existing Windows line-ending warnings were reported.
+- No package installation, full mobile build, Git commit, or GitHub push was performed.
+
+## Personalized web Explore redesign — 2026-10-05 12:22:42 +05:30
+
+### User report and root cause
+
+- Clicking Web Explore automatically placed `Trending music` inside the search box.
+- Explore was only a normal search-result page, not the YouTube Music-style discovery layout requested by the user.
+- The behavior came from `navigate("explore")` calling both `setQuery("Trending music")` and `search("Trending music")`, coupling internal feed loading to user-visible search state.
+
+### Implemented changes
+
+- Explore navigation now calls a dedicated `loadExplore()` flow and explicitly keeps the search input empty.
+- Added `frontend/src/components/explore-page.tsx` with the requested structure:
+  - New releases, Charts, Moods & genres, and Podcasts category cards;
+  - New albums & singles artwork shelf;
+  - dynamic Moods & genres grid;
+  - numbered, multi-column Trending for you chart;
+  - widescreen New music videos shelf.
+- The page is not backed by hardcoded media cards. It reads the signed-in user's local `innerwave-history:<userId>` listening history, extracts recent artists, and combines live responses from:
+  - `GET /api/home` for current discovery chips/moods and a cold-start seed;
+  - `GET /api/search` for artist-aware releases, trends, and music videos;
+  - `GET /api/recommendations` for history-derived artist recommendations.
+- A listener with no history receives current live YouTube Music data; after listening, Explore automatically uses recent artists as its personalization seeds the next time it is opened.
+- Programmatic Explore category/mood browsing does not write internal query text into the search field.
+- Added request-version protection so an older Explore response cannot overwrite Home or a newer user search after fast navigation.
+- Search placeholder now matches the supplied design: `Search songs, albums, artists, podcasts`.
+- Added desktop/tablet/mobile Explore styles matching the supplied dark YouTube Music layout, including category tiles, six-column releases, colored mood cards, chart rows, video cards, and responsive horizontal overflow.
+
+### Verification
+
+- Frontend ESLint passed with zero errors.
+- `npx tsc --noEmit` passed with zero TypeScript errors.
+- Local Next.js preview reloaded with zero browser runtime warnings/errors.
+- The isolated visual-QA browser did not share the user's authenticated app session, so the signed-in Explore screen could not be screenshot-verified during this run.
+- `git diff --check` passed; only existing Windows line-ending warnings were shown.
+- No dependency installation, production build, Git commit, GitHub push, Render deployment, or Vercel deployment was performed.
+- Five-hour Codex usage checkpoint: 35% used / 65% remaining, above the requested 30% remaining stop threshold.

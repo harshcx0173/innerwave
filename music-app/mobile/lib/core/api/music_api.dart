@@ -324,10 +324,10 @@ class MusicApi {
     String? continuation,
     bool forceRefresh = false,
   }) async {
-    // Versioned so devices do not reuse the older search-generated queues
-    // after the backend switched back to YouTube Music radio-first results.
+    // Versioned so devices do not reuse duplicate-heavy queues produced before
+    // server-side content filtering and diversity ranking was introduced.
     final cacheKey =
-        'queue_v2_${videoId}_${playlistId ?? ''}_${continuation?.hashCode ?? 0}';
+        'queue_v3_${videoId}_${playlistId ?? ''}_${continuation?.hashCode ?? 0}';
 
     return _fetchCached<Map<String, dynamic>>(
       cacheKey: cacheKey,

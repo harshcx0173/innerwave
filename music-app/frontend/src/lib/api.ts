@@ -20,10 +20,18 @@ export const musicApi = {
       `/api/browse?id=${encodeURIComponent(id)}${params ? `&params=${encodeURIComponent(params)}` : ""}`,
       signal,
     ),
-  next: (item: MediaItem, continuation?: string | null) =>
-    getJson<{ items: MediaItem[]; continuation?: string | null }>(
-      `/api/next?${continuation ? `continuation=${encodeURIComponent(continuation)}` : `videoId=${encodeURIComponent(item.videoId || "")}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artists.join(", ") || item.subtitle.split(" · ")[0] || "")}`}${item.playlistId ? `&playlistId=${encodeURIComponent(item.playlistId)}` : ""}${item.watchParams ? `&params=${encodeURIComponent(item.watchParams)}` : ""}${item.index != null ? `&index=${item.index}` : ""}`,
-    ),
+  next: (item: MediaItem, continuation?: string | null) => {
+    const query = new URLSearchParams({
+      videoId: item.videoId || "",
+      title: item.title,
+      artist: item.artists.join(", ") || item.subtitle.split(" · ")[0] || "",
+    });
+    if (continuation) query.set("continuation", continuation);
+    if (item.playlistId) query.set("playlistId", item.playlistId);
+    if (item.watchParams) query.set("params", item.watchParams);
+    if (item.index != null) query.set("index", String(item.index));
+    return getJson<{ items: MediaItem[]; continuation?: string | null }>(`/api/next?${query}`);
+  },
   lyrics: (item: MediaItem, duration?: number, signal?: AbortSignal) => {
     const artist = item.artists.join(", ") || item.subtitle.split(" · ")[0] || "";
     const query = new URLSearchParams({ videoId: item.videoId || "", title: item.title, artist });

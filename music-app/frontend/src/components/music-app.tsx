@@ -16,6 +16,7 @@ import { Topbar } from "./topbar";
 import { MediaArt } from "./media-art";
 import { TasteBuilder } from "./taste-builder";
 import { ProfilePage } from "./profile-page";
+import { ExplorePage } from "./explore-page";
 
 type View = "home" | "explore" | "library" | "profile";
 
@@ -28,6 +29,27 @@ function orderHomeShelves(shelves: ShelfType[]) {
     return 200;
   };
   return [...shelves].sort((first, second) => rank(first) - rank(second));
+}
+
+function feedItems(feed: Feed) {
+  return feed.shelves.flatMap((shelf) => shelf.items);
+}
+
+function uniqueItems(items: MediaItem[]) {
+  return items.filter((item, index) => items.findIndex((candidate) => candidate.id === item.id) === index);
+}
+
+function interleaveItems(...groups: MediaItem[][]) {
+  const mixed: MediaItem[] = [];
+  const longest = Math.max(0, ...groups.map((group) => group.length));
+  for (let index = 0; index < longest; index++) {
+    for (const group of groups) if (group[index]) mixed.push(group[index]);
+  }
+  return uniqueItems(mixed);
+}
+
+function recentArtists(items: MediaItem[]) {
+  return [...new Set(items.flatMap((item) => item.artists).filter((artist) => artist && !["song", "video"].includes(artist.toLowerCase())))].slice(0, 3);
 }
 
 function colorFromText(value: string) {
@@ -81,7 +103,11 @@ export function MusicApp() {
   const [activeChip, setActiveChip] = useState("All");
   const [collection, setCollection] = useState<MediaItem | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [exploreLanding, setExploreLanding] = useState(false);
+  const [exploreMoods, setExploreMoods] = useState<string[]>([]);
+  const [exploreSeed, setExploreSeed] = useState("");
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const exploreRequestRef = useRef(0);
   const artworkColor = useArtworkColor(player.current?.thumbnail, player.current?.title || "InnerWave");
 
   useEffect(() => {
@@ -92,7 +118,9 @@ export function MusicApp() {
   }, [displayName]);
 
   const loadHome = useCallback(async () => {
+    exploreRequestRef.current += 1;
     setLoading(true); setError(null); setView("home");
+    setQuery(""); setExploreLanding(false);
     setTitle(`Made for ${displayName}`);
     setCollection(null);
     setSubtitle("A living mix of fresh finds, familiar favorites and everything between.");
@@ -159,12 +187,69 @@ export function MusicApp() {
 
   const search = useCallback(async (value: string) => {
     if (!value.trim()) return;
+    exploreRequestRef.current += 1;
     setCollection(null);
+    setExploreLanding(false);
     setLoading(true); setError(null); setView("explore"); setTitle(`Results for “${value}”`); setSubtitle("Songs, albums, artists and playlists from YouTube Music.");
     try { setFeed(await musicApi.search(value)); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Search failed"); }
     finally { setLoading(false); }
   }, []);
+
+  const loadExplore = useCallback(async () => {
+    const requestId = ++exploreRequestRef.current;
+    setLoading(true); setError(null); setView("explore"); setCollection(null);
+    setQuery(""); setExploreLanding(true);
+    setTitle("Explore");
+    setSubtitle("Fresh releases, charts and discoveries shaped by your listening.");
+    try {
+      const baseHome = await musicApi.home();
+      if (requestId !== exploreRequestRef.current) return;
+      const history = JSON.parse(localStorage.getItem(historyKey) || "[]") as MediaItem[];
+      const sourceItems = history.length ? history : feedItems(baseHome);
+      const artists = recentArtists(sourceItems);
+      const primarySeed = artists[0] || sourceItems[0]?.title || "music";
+      const secondarySeed = artists[1] || primarySeed;
+      setExploreSeed(primarySeed);
+
+      const [releaseFeed, trendingFeed, videoFeed, personalFeed] = await Promise.all([
+        musicApi.search(`${primarySeed} new albums singles`).catch(() => ({ shelves: [] } as Feed)),
+        musicApi.search(`${primarySeed} ${secondarySeed} trending songs`).catch(() => ({ shelves: [] } as Feed)),
+        musicApi.search(`${secondarySeed} new music videos`).catch(() => ({ shelves: [] } as Feed)),
+        artists.length ? musicApi.recommendations(artists).catch(() => ({ shelves: [] } as Feed)) : Promise.resolve({ shelves: [] } as Feed),
+      ]);
+      if (requestId !== exploreRequestRef.current) return;
+
+      const releaseCandidates = uniqueItems(feedItems(releaseFeed));
+      const releaseItems = uniqueItems([
+        ...releaseCandidates.filter((item) => item.type === "album"),
+        ...releaseCandidates.filter((item) => item.type === "playlist"),
+        ...releaseCandidates.filter((item) => !["album", "playlist", "artist"].includes(item.type)),
+      ]).slice(0, 7);
+      const trendingItems = interleaveItems(
+        feedItems(trendingFeed).filter((item) => item.videoId),
+        feedItems(personalFeed).filter((item) => item.videoId),
+      ).slice(0, 12);
+      const videoCandidates = uniqueItems(feedItems(videoFeed).filter((item) => item.videoId));
+      const explicitVideos = videoCandidates.filter((item) => {
+        const label = `${item.title} ${item.subtitle}`.toLowerCase();
+        return label.includes("video") || label.includes("views");
+      });
+      const videoItems = uniqueItems([...explicitVideos, ...videoCandidates]).slice(0, 6);
+      const exploreShelves: ShelfType[] = [
+        { id: "explore-releases", title: "New albums & singles", layout: "carousel", items: releaseItems },
+        { id: "explore-trending", title: "Trending for you", layout: "list", items: trendingItems },
+        { id: "explore-videos", title: "New music videos", layout: "carousel", items: videoItems },
+      ];
+      const shelves = exploreShelves.filter((shelf) => shelf.items.length);
+      setExploreMoods((baseHome.chips || []).filter(Boolean).slice(0, 24));
+      setFeed({ shelves });
+    } catch (reason) {
+      if (requestId === exploreRequestRef.current) setError(reason instanceof Error ? reason.message : "Could not build your Explore page");
+    } finally {
+      if (requestId === exploreRequestRef.current) setLoading(false);
+    }
+  }, [historyKey]);
 
   useEffect(() => {
     if (query.trim().length < 2) return;
@@ -196,11 +281,27 @@ export function MusicApp() {
   const navigate = useCallback((nextView: View) => {
     setCollection(null);
     if (nextView === "home") { loadHome(); return; }
-    if (nextView === "explore") { setQuery("Trending music"); search("Trending music"); return; }
+    if (nextView === "explore") { loadExplore(); return; }
+    exploreRequestRef.current += 1;
     const history = JSON.parse(localStorage.getItem(historyKey) || "[]") as MediaItem[];
     const shelf: ShelfType = { id: "history", title: "Recently played", layout: "list", items: history };
     setView("library"); setTitle("Your Library"); setSubtitle("Your last 50 plays stay private in this browser."); setFeed({ shelves: history.length ? [shelf] : [] }); setError(null);
-  }, [historyKey, loadHome, search]);
+  }, [historyKey, loadExplore, loadHome]);
+
+  const browseExplore = useCallback((kind: "releases" | "charts" | "moods" | "podcasts") => {
+    const seed = exploreSeed || "music";
+    const requests = {
+      releases: `${seed} new releases`,
+      charts: `${seed} trending charts`,
+      moods: `${seed} moods genres`,
+      podcasts: `${seed} music podcasts`,
+    };
+    search(requests[kind]);
+  }, [exploreSeed, search]);
+
+  const browseMood = useCallback((mood: string) => {
+    search(`${mood} ${exploreSeed || ""} music`.trim());
+  }, [exploreSeed, search]);
 
   const playCollection = useCallback((shuffle = false) => {
     const tracks = feed.shelves.flatMap((shelf) => shelf.items).filter((item) => item.videoId);
@@ -264,9 +365,9 @@ export function MusicApp() {
         />
         <div className="page-content">
           {view === "profile" ? <ProfilePage onBack={() => setView("home")} /> : <>
-          {collection ? <section className="collection-header"><MediaArt item={collection} className="collection-art" /><div><span>{collection.type.toUpperCase()}</span><h1>{collection.title}</h1><p>{collection.subtitle}</p><div className="collection-actions"><button onClick={() => playCollection(false)}><Play fill="currentColor" />Play all</button><button onClick={() => playCollection(true)}><Shuffle />Shuffle</button></div></div></section> : view !== "home" ? <section className="home-heading"><h1>{title}</h1><p>{subtitle}</p></section> : null}
+          {collection ? <section className="collection-header"><MediaArt item={collection} className="collection-art" /><div><span>{collection.type.toUpperCase()}</span><h1>{collection.title}</h1><p>{collection.subtitle}</p><div className="collection-actions"><button onClick={() => playCollection(false)}><Play fill="currentColor" />Play all</button><button onClick={() => playCollection(true)}><Shuffle />Shuffle</button></div></div></section> : view !== "home" && !exploreLanding ? <section className="home-heading"><h1>{title}</h1><p>{subtitle}</p></section> : null}
           {view === "home" && <div className="mood-chips">{["All", ...(feed.chips || ["Relax", "Energize", "Workout", "Commute", "Focus"])].map((chip) => <button key={chip} className={activeChip === chip ? "active" : ""} onClick={() => chooseChip(chip)}>{chip}</button>)}</div>}
-          {loading ? <div className="state"><LoaderCircle className="spin" /><p>Loading music…</p></div> : error ? <div className="state error"><p>{error}</p><button onClick={loadHome}><RefreshCw size={15} />Try again</button></div> : feed.shelves.length ? feed.shelves.map((shelf) => <Fragment key={shelf.id}><Shelf shelf={shelf} onSelect={selectItem} onPlayAll={playContainer} />{shelf.id === "discover-1" && <TasteBuilder items={shelf.items} onExplore={() => search("Top artists")} />}</Fragment>) : <div className="state"><p>No playable results found yet.</p></div>}
+          {loading ? <div className="state"><LoaderCircle className="spin" /><p>Loading music…</p></div> : error ? <div className="state error"><p>{error}</p><button onClick={exploreLanding ? loadExplore : loadHome}><RefreshCw size={15} />Try again</button></div> : exploreLanding ? <ExplorePage shelves={feed.shelves} moods={exploreMoods} onSelect={selectItem} onPlayAll={playContainer} onBrowse={browseExplore} onMood={browseMood} /> : feed.shelves.length ? feed.shelves.map((shelf) => <Fragment key={shelf.id}><Shelf shelf={shelf} onSelect={selectItem} onPlayAll={playContainer} />{shelf.id === "discover-1" && <TasteBuilder items={shelf.items} onExplore={() => search("Top artists")} />}</Fragment>) : <div className="state"><p>No playable results found yet.</p></div>}
           {view === "home" && <div ref={loadMoreRef} className="load-more-sentinel">{loadingMore ? <><LoaderCircle className="spin" /> Loading more</> : nextPage == null ? "You’re all caught up" : ""}</div>}
           </>}
         </div>
