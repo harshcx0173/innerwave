@@ -113,6 +113,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [volume, setVolumeState] = useState(0.8);
   const [error, setError] = useState<string | null>(null);
 
+  const currentRef = useRef<MediaItem | null>(null);
+  const currentTimeRef = useRef(0);
+  const isPlayingRef = useRef(false);
+  const volumeRef = useRef(0.8);
+
+  useEffect(() => { currentRef.current = current; }, [current]);
+  useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
+
   useEffect(() => {
     queueRef.current = queue;
   }, [queue]);
@@ -375,25 +385,43 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const elapsed = next.isPlaying ? Math.max(0, (Date.now() - Number(next.capturedAt || Date.now())) / 1000) : 0;
     const nextTime = Math.max(0, Number(next.currentTime || 0) + elapsed);
     if (!playLocally) transport.current?.pause();
-    if (playLocally && next.current?.videoId !== current?.videoId) transport.current?.stop();
+
+    const isNewTrack = next.current?.videoId !== currentRef.current?.videoId;
+    if (playLocally && isNewTrack) transport.current?.stop();
     resumeTime.current = nextTime;
     autoplayOnLoad.current = playLocally && next.isPlaying;
     setCurrent(next.current);
     setQueue(Array.isArray(next.queue) ? next.queue : []);
     setQueueIndex(Math.max(0, Number(next.queueIndex) || 0));
-    setCurrentTime(nextTime);
     setDuration(Math.max(0, Number(next.duration) || 0));
-    setVolumeState(Math.max(0, Math.min(1, Number(next.volume) || 0)));
     setIsPlaying(Boolean(next.isPlaying));
     setQueueContinuation(next.queueContinuation || null);
     seenIdsRef.current = new Set((next.queue || []).map((item) => item.id));
-    if (playLocally && next.current?.videoId === current?.videoId) {
-      transport.current?.seek(nextTime);
-      transport.current?.setVolume(Math.max(0, Math.min(1, Number(next.volume) || 0)));
-      if (next.isPlaying) transport.current?.play();
-      else transport.current?.pause();
+
+    if (playLocally) {
+      if (isNewTrack) {
+        setCurrentTime(nextTime);
+        setVolumeState(Math.max(0, Math.min(1, Number(next.volume) || 0)));
+      } else {
+        // Same song: ONLY seek if drift exceeds 2.5 seconds to prevent audio cracking/stuttering
+        const drift = Math.abs(currentTimeRef.current - nextTime);
+        if (drift > 2.5) {
+          transport.current?.seek(nextTime);
+          setCurrentTime(nextTime);
+        }
+        if (Math.abs(volumeRef.current - Number(next.volume || 0)) > 0.05) {
+          const nextVol = Math.max(0, Math.min(1, Number(next.volume) || 0));
+          transport.current?.setVolume(nextVol);
+          setVolumeState(nextVol);
+        }
+        if (next.isPlaying && !isPlayingRef.current) {
+          transport.current?.play();
+        } else if (!next.isPlaying && isPlayingRef.current) {
+          transport.current?.pause();
+        }
+      }
     }
-  }, [current?.videoId]);
+  }, []);
 
   const setLocalPlaybackEnabled = useCallback((enabled: boolean) => {
     localPlaybackEnabledRef.current = enabled;

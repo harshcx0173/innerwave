@@ -279,18 +279,22 @@ class PlaybackSyncController extends ChangeNotifier {
       'snapshot': snapshot,
       'revision': revision,
     };
-    await channel.sendBroadcastMessage(
-      event: 'state',
-      payload: {'payload': payload},
-    );
-    if (persist) {
-      await _client.from('playback_sessions').upsert({
-        'user_id': user.id,
-        'active_device_id': deviceId,
-        'state': snapshot,
-        'revision': revision,
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      });
+    try {
+      await channel.sendBroadcastMessage(
+        event: 'state',
+        payload: {'payload': payload},
+      );
+      if (persist) {
+        await _client.from('playback_sessions').upsert({
+          'user_id': user.id,
+          'active_device_id': deviceId,
+          'state': snapshot,
+          'revision': revision,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        });
+      }
+    } catch (e) {
+      debugPrint('[PlaybackSyncController] sendState failed: $e');
     }
   }
 

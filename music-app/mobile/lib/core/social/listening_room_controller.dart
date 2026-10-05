@@ -40,16 +40,22 @@ class RoomChatMessage {
 class ListeningRoomController extends ChangeNotifier {
   final SupabaseClient _client = Supabase.instance.client;
   AuthController? _auth; PlayerProvider? _player; RealtimeChannel? _channel;
-  Timer? _syncTimer, _persistTimer; String? _userId; int _generation = 0, _revision = 0, _suppressUntil = 0;
+  Timer? _syncTimer, _persistTimer; String? _userId; int _generation = 0, _revision = 0;
   final String _clientId = '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
-  String? _controllerId; Map<String, dynamic>? _lastSnapshot; bool _disposed = false;
+  bool _disposed = false;
   final Set<String> _knownMessageIds = {}; bool _messagesReady = false;
   ListeningRoom? _room; List<RoomMember> _members = const []; List<RoomChatMessage> _messages = const [];
   bool _connected = false, _busy = false; String? _error;
 
+  bool _isLive = true;
+  Map<String, dynamic>? _latestHostSnapshot;
+
   ListeningRoom? get room => _room; List<RoomMember> get members => _members; List<RoomChatMessage> get messages => _messages;
   bool get connected => _connected; bool get busy => _busy; String? get error => _error;
   String? get currentUserId => _userId;
+  bool get isLive => _isLive;
+  bool get isInRoom => _room != null;
+  bool get isHost => _room != null && _userId != null && _room!.hostId == _userId;
 
   void update(AuthController auth, PlayerProvider player) {
     _auth = auth; _player = player; final next = auth.user?.id;
@@ -75,8 +81,12 @@ class ListeningRoomController extends ChangeNotifier {
   }
 
   Future<void> _attach(ListeningRoom next) async {
-    await _detach(); _knownMessageIds.clear(); _messagesReady = false; _room = next; _revision = next.revision; _controllerId = next.hostId == _userId ? _clientId : null;
-    if (next.playbackState.isNotEmpty) { _suppressUntil = DateTime.now().millisecondsSinceEpoch + 1200; await _player?.applyRemoteSnapshot(next.playbackState, playLocally: true); _lastSnapshot = next.playbackState; }
+    await _detach(); _knownMessageIds.clear(); _messagesReady = false; _room = next; _revision = next.revision;
+    _isLive = true;
+    _latestHostSnapshot = next.playbackState.isNotEmpty ? next.playbackState : null;
+    if (next.hostId != _userId && next.playbackState.isNotEmpty) {
+      await _player?.applyRemoteSnapshot(next.playbackState, playLocally: true);
+    }
     await Future.wait([_loadMessages(), _loadMembers()]);
     final channel = _client.channel('room:${next.id}', opts: RealtimeChannelConfig(private: true, key: _clientId, enabled: true)); _channel = channel;
     channel.onPresenceSync((_) => _loadMembersFromPresence(channel))
@@ -90,30 +100,83 @@ class ListeningRoomController extends ChangeNotifier {
   }
 
   Map<String, dynamic> _payload(Map<String, dynamic> raw) => raw['payload'] is Map ? Map<String, dynamic>.from(raw['payload'] as Map) : raw;
-  bool _significant(Map<String, dynamic>? a, Map<String, dynamic> b) {
-    if (a == null) return true;
-    final ac = a['current'] is Map ? (a['current'] as Map)['id'] : null, bc = b['current'] is Map ? (b['current'] as Map)['id'] : null;
-    return ac != bc || a['queueIndex'] != b['queueIndex'] || a['isPlaying'] != b['isPlaying'] ||
-      ((((a['volume'] as num?) ?? 0).toDouble() - ((b['volume'] as num?) ?? 0).toDouble()).abs() > .02) ||
-      ((((a['currentTime'] as num?) ?? 0).toDouble() - ((b['currentTime'] as num?) ?? 0).toDouble()).abs() > 2.25);
-  }
 
   Future<void> _broadcastPlayback() async {
-    final channel = _channel, player = _player, userId = _userId; if (channel == null || player == null || userId == null) return;
-    final snapshot = player.createSyncSnapshot(); final now = DateTime.now().millisecondsSinceEpoch;
-    if (now >= _suppressUntil && _significant(_lastSnapshot, snapshot)) _controllerId = _clientId; _lastSnapshot = snapshot;
-    if (_controllerId != _clientId) return; _revision = max(_revision + 1, now);
-    await channel.sendBroadcastMessage(event: 'playback', payload: {'payload': {'origin': _clientId, 'userId': userId, 'revision': _revision, 'snapshot': snapshot}});
+    final channel = _channel, player = _player, userId = _userId, room = _room;
+    if (channel == null || player == null || userId == null || room == null) return;
+    // Host-only authority: Only the host broadcasts playback state to the room
+    if (room.hostId != userId) return;
+    final snapshot = player.createSyncSnapshot();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _revision = max(_revision + 1, now);
+    try {
+      await channel.sendBroadcastMessage(
+        event: 'playback',
+        payload: {
+          'payload': {
+            'origin': _clientId,
+            'userId': userId,
+            'revision': _revision,
+            'snapshot': snapshot,
+          }
+        },
+      );
+    } catch (e) {
+      debugPrint('[ListeningRoomController] broadcast failed: $e');
+    }
   }
 
   Future<void> _receivePlayback(Map<String, dynamic> payload) async {
-    if (payload['origin'] == _clientId) return; final revision = ((payload['revision'] as num?) ?? 0).toInt(); if (revision <= _revision) return;
-    final raw = payload['snapshot']; if (raw is! Map) return; final snapshot = Map<String, dynamic>.from(raw);
-    _revision = revision; _controllerId = payload['origin']?.toString(); _suppressUntil = DateTime.now().millisecondsSinceEpoch + 900; _lastSnapshot = snapshot;
+    final room = _room, userId = _userId;
+    if (room == null || userId == null) return;
+    // Host has full authority and never applies remote playback broadcasts
+    if (room.hostId == userId) return;
+    if (payload['origin'] == _clientId) return;
+    // Only accept broadcasts sent by the room host
+    final senderUserId = payload['userId']?.toString();
+    if (senderUserId != null && senderUserId != room.hostId) return;
+
+    final revision = ((payload['revision'] as num?) ?? 0).toInt();
+    if (revision <= _revision) return;
+    final raw = payload['snapshot'];
+    if (raw is! Map) return;
+    final snapshot = Map<String, dynamic>.from(raw);
+    _revision = revision;
+    _latestHostSnapshot = snapshot;
+    // If listener paused locally, keep local pause and do not force playback/seeking
+    if (!_isLive) return;
     await _player?.applyRemoteSnapshot(snapshot, playLocally: true);
   }
 
-  Future<void> _persistPlayback() async { if (_controllerId != _clientId || _room == null || _player == null) return; await _client.from('listening_rooms').update({'playback_state': _player!.createSyncSnapshot(), 'revision': _revision, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', _room!.id); }
+  void pauseListener() {
+    _isLive = false;
+    _notify();
+    _player?.pause();
+  }
+
+  Future<void> goLive() async {
+    _isLive = true;
+    _notify();
+    if (_latestHostSnapshot != null) {
+      await _player?.applyRemoteSnapshot(_latestHostSnapshot!, playLocally: true);
+    }
+  }
+
+  Future<void> _persistPlayback() async {
+    final room = _room, player = _player, userId = _userId;
+    if (room == null || player == null || userId == null) return;
+    // Only the host persists playback state
+    if (room.hostId != userId) return;
+    try {
+      await _client.from('listening_rooms').update({
+        'playback_state': player.createSyncSnapshot(),
+        'revision': _revision,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', room.id);
+    } catch (e) {
+      debugPrint('[ListeningRoomController] persist failed: $e');
+    }
+  }
 
   Future<void> _loadMembers([Set<String>? online]) async {
     final active = _room; if (active == null) return; final rows = await _client.from('room_members').select('user_id,role').eq('room_id', active.id);
@@ -139,7 +202,7 @@ class ListeningRoomController extends ChangeNotifier {
   Future<bool> sendMessage(String body, {String? replyTo, MediaItem? song}) async { if (_room == null || _userId == null || (body.trim().isEmpty && song == null)) return false; try { await _client.from('room_messages').insert({'room_id': _room!.id, 'sender_id': _userId, 'body': body.trim(), 'reply_to': replyTo, 'song': song?.toJson()}); await _loadMessages(); return true; } catch (e) { _error = e.toString(); _notify(); return false; } }
   Future<void> toggleReaction(String messageId, String emoji) async { if (_userId == null) return; final exists = _messages.any((m) => m.id == messageId && m.reactions.any((r) => r.userId == _userId && r.emoji == emoji)); if (exists) { await _client.from('message_reactions').delete().eq('message_id', messageId).eq('user_id', _userId!).eq('emoji', emoji); } else { await _client.from('message_reactions').insert({'message_id': messageId, 'user_id': _userId, 'emoji': emoji}); } await _loadMessages(); }
   Future<void> leaveRoom() async { final active = _room; await _detach(); if (active != null && _userId != null) await _client.from('room_members').delete().eq('room_id', active.id).eq('user_id', _userId!); _room = null; _members = const []; _messages = const []; _notify(); }
-  Future<void> _detach() async { _syncTimer?.cancel(); _persistTimer?.cancel(); _syncTimer = null; _persistTimer = null; final channel = _channel; _channel = null; if (channel != null) await _client.removeChannel(channel); _connected = false; _controllerId = null; }
+  Future<void> _detach() async { _syncTimer?.cancel(); _persistTimer?.cancel(); _syncTimer = null; _persistTimer = null; final channel = _channel; _channel = null; if (channel != null) await _client.removeChannel(channel); _connected = false; _isLive = true; _latestHostSnapshot = null; }
   void _setBusy(bool value) { _busy = value; if (value) _error = null; _notify(); }
   void _notify() { if (!_disposed) notifyListeners(); }
   @override void dispose() { _disposed = true; _syncTimer?.cancel(); _persistTimer?.cancel(); if (_channel != null) unawaited(_client.removeChannel(_channel!)); super.dispose(); }

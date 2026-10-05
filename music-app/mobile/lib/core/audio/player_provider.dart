@@ -642,6 +642,14 @@ class PlayerProvider extends ChangeNotifier {
     }
   }
 
+  void pause() {
+    unawaited(_audioPlayer.pause());
+  }
+
+  void resume() {
+    unawaited(_audioPlayer.play());
+  }
+
   void next() {
     if (_intercept({'action': 'next'})) return;
     if (_queueIndex + 1 < _queue.length) {
@@ -915,7 +923,7 @@ class PlayerProvider extends ChangeNotifier {
     final elapsedMs = playing
         ? (DateTime.now().millisecondsSinceEpoch - capturedAt).clamp(0, 10000)
         : 0;
-    _position = Duration(
+    final remotePosition = Duration(
       milliseconds:
           ((((snapshot['currentTime'] as num?) ?? 0).toDouble() * 1000)
               .round() +
@@ -929,18 +937,43 @@ class PlayerProvider extends ChangeNotifier {
     _isPlaying = playing;
     _queueContinuation = snapshot['queueContinuation'] as String?;
     _seenIds.addAll(_queue.map((item) => item.id));
-    notifyListeners();
+
     if (!playLocally) {
+      _position = remotePosition;
+      notifyListeners();
       await _audioPlayer.pause();
       return;
     }
+
     await _audioPlayer.setVolume(_volume);
     final videoId = _current?.videoId;
     if (_current != null && _currentLyrics == null) {
       unawaited(_preloadLyricsAndRelated(_current!));
     }
     if (videoId != null) {
-      await _loadAndPlayStream(videoId, autoplay: playing, start: _position);
+      if (_loadedVideoId != videoId) {
+        _position = remotePosition;
+        notifyListeners();
+        await _loadAndPlayStream(videoId, autoplay: playing, start: remotePosition);
+      } else {
+        final currentPos = _audioPlayer.position;
+        final driftMs = (remotePosition - currentPos).inMilliseconds.abs();
+        if (driftMs > 2500) {
+          _position = remotePosition;
+          await _audioPlayer.seek(remotePosition);
+        } else {
+          _position = currentPos;
+        }
+        if (playing && !_audioPlayer.playing) {
+          unawaited(_audioPlayer.play());
+        } else if (!playing && _audioPlayer.playing) {
+          await _audioPlayer.pause();
+        }
+        notifyListeners();
+      }
+    } else {
+      _position = remotePosition;
+      notifyListeners();
     }
   }
 

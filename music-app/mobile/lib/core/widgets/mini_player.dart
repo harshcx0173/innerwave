@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../audio/player_provider.dart';
+import '../social/listening_room_controller.dart';
 import '../theme/app_theme.dart';
 import 'media_art.dart';
 import '../../features/player/fullscreen_player.dart';
@@ -96,13 +97,68 @@ class MiniPlayer extends StatelessWidget {
                             ],
                           ),
                         ),
-                        IconButton(
-                          icon: Icon(
-                            player.isPlaying ? Icons.pause : Icons.play_arrow,
-                            color: AppTheme.textPrimary,
-                            size: 24,
-                          ),
-                          onPressed: player.togglePlayPause,
+                        Consumer<ListeningRoomController>(
+                          builder: (context, room, _) {
+                            final isListener = room.isInRoom && !room.isHost;
+                            final showGoLive = isListener && (!room.isLive || !player.isPlaying);
+
+                            if (showGoLive) {
+                              return InkWell(
+                                onTap: room.goLive,
+                                borderRadius: BorderRadius.circular(20),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.redAccent,
+                                    borderRadius: BorderRadius.circular(20),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.redAccent.withValues(alpha: 0.45),
+                                        blurRadius: 8,
+                                        spreadRadius: 1,
+                                      ),
+                                    ],
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.circle, size: 8, color: Colors.white),
+                                      SizedBox(width: 4),
+                                      Text(
+                                        'LIVE',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                          letterSpacing: 0.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }
+
+                            return IconButton(
+                              icon: Icon(
+                                player.isPlaying ? Icons.pause : Icons.play_arrow,
+                                color: AppTheme.textPrimary,
+                                size: 24,
+                              ),
+                              onPressed: () {
+                                if (isListener) {
+                                  if (room.isLive && player.isPlaying) {
+                                    room.pauseListener();
+                                  } else {
+                                    room.goLive();
+                                  }
+                                } else {
+                                  player.togglePlayPause();
+                                }
+                              },
+                            );
+                          },
                         ),
                         IconButton(
                           icon: const Icon(

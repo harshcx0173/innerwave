@@ -917,3 +917,163 @@ The Supabase CLI is not installed and no Supabase management access token/databa
 - Added cached `flutter_local_notifications` dependency; no unrelated package upgrades were performed.
 - Verification: frontend production build passed; Flutter full suite passed **7/7**; Flutter analyzer has no new errors/warnings (three unrelated pre-existing deprecation infos remain).
 - User authorized commit and GitHub push for this complete local change set.
+
+## 05/10/2026 — Android core library desugaring fix
+
+- Resolved `:app:checkDebugAarMetadata` failure where `flutter_local_notifications` requires core library desugaring.
+- Updated [build.gradle.kts](file:///d:/Learn/InnerTube/music-app/mobile/android/app/build.gradle.kts) to enable `isCoreLibraryDesugaringEnabled = true` in `compileOptions` and added `coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")` to `dependencies`.
+- Verification: `flutter build apk --debug` succeeded (`assembleDebug` passed) and Flutter test suite passed **7/7**.
+
+## 05/10/2026 — Music sharing host authority and smooth playback synchronization
+
+### User report & Root cause
+- **Host lost control when listener joined**: When a listener joined the room, minor time drift or volume difference triggered automatic controller reassignment (`controllerRef.current = clientId` on Web / `_controllerId = _clientId` on Flutter). The listener then broadcast their own playback state to the room with an incremented revision, overriding the host's control and preventing the host from controlling playback.
+- **Audio cracking/stuttering for listeners**:
+  - In `mobile/lib/core/audio/player_provider.dart`, every incoming 500 ms playback snapshot invoked `_loadAndPlayStream(...)` even for the same `videoId`, causing continuous stream aborts, YouTube manifest re-fetching, stream URL resets, and socket exceptions.
+  - In `frontend/src/context/player-context.tsx`, every incoming snapshot unconditionally called `transport.current?.seek(nextTime)` on the YouTube player iframe, continuously resetting the buffer and causing audio clicks and stuttering.
+
+### Implemented changes
+- **Host-only playback authority**:
+  - In [listening-room-context.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/context/listening-room-context.tsx) and [listening_room_controller.dart](file:///d:/Learn/InnerTube/music-app/mobile/lib/core/social/listening_room_controller.dart), only the room host (`room.host_id == user.id`) broadcasts playback state to the realtime channel and persists snapshots to Supabase `listening_rooms`.
+  - Listeners follow the host and never broadcast playback snapshots or self-assign controller status.
+  - The host ignores incoming playback broadcasts, guaranteeing absolute control over play/pause, seek, tracks, and queue.
+  - Listeners only accept broadcasts signed by the room's host ID.
+- **Smooth playback synchronization (eliminated cracking/stuttering)**:
+  - In [player_provider.dart](file:///d:/Learn/InnerTube/music-app/mobile/lib/core/audio/player_provider.dart), if the track is already loaded (`_loadedVideoId == videoId`), the stream is never reloaded. Drift is checked against the local position; seeking only occurs if drift exceeds 2.5 seconds.
+  - In [player-context.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/context/player-context.tsx), same-track snapshots no longer seek unconditionally; seeking only occurs when drift exceeds 2.5 seconds, allowing smooth uninterrupted playback.
+- **Network resilience**:
+  - In [playback_sync_controller.dart](file:///d:/Learn/InnerTube/music-app/mobile/lib/core/sync/playback_sync_controller.dart), wrapped broadcast and `playback_sessions` upsert in a try-catch to prevent unhandled network socket exceptions from crashing the client on connection drops.
+
+### Verification
+- Frontend production build (`npm run build`) passed with zero errors.
+- Frontend lint (`npm run lint`) passed with zero errors.
+- Flutter analyzer (`flutter analyze lib`) passed with zero errors and zero warnings.
+- Flutter test suite (`flutter test`) passed **7/7**.
+
+## 05/10/2026 — Listener local pause & "Go Live" resynchronization
+
+### User report & Requirements
+- **Local Pause for Listeners**: If a listener pauses playback, it must pause **only on their local device**; the host and all other room members continue listening to the live stream uninterrupted.
+- **"Go Live" Button**: If a listener is not synchronized with the live stream (paused locally or fallen behind), the playback control displays a **"Go Live"** button instead of a regular Play button. Clicking it immediately catches up and resynchronizes the listener with the host's current live playback.
+
+### Implemented changes
+- **Web Frontend**:
+  - In [listening-room-context.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/context/listening-room-context.tsx):
+    - Added `isLive` state tracking whether the listener is actively synced with the room's live playback.
+    - Added `latestHostSnapshotRef` to buffer incoming host broadcasts even while locally paused.
+    - Added `pauseListener()`: pauses local audio and marks `isLive = false`, preventing subsequent 500 ms host broadcasts from forcefully unpausing the listener.
+    - Added `goLive()`: sets `isLive = true`, fetches the buffered host snapshot, catches up to the current song and position (+ elapsed time), and smoothly resumes live playback.
+    - Exported `isHost`, `isInRoom`, `isLive`, `goLive`, and `pauseListener` via context.
+  - In [player-bar.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/player-bar.tsx) & [fullscreen-player.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/fullscreen-player.tsx):
+    - When a listener is in a room and paused/desynced (`!isLive || !player.isPlaying`), the primary play button transforms into a pulsating **"LIVE" / "GO LIVE"** button.
+    - Clicking the button calls `goLive()`, immediately syncing and resuming live playback.
+    - When listening live, clicking Pause calls `pauseListener()`, pausing only that local device.
+  - In [globals.css](file:///d:/Learn/InnerTube/music-app/frontend/src/app/globals.css):
+    - Added styling and pulsating red dot animations for `.play-main.go-live`, `.fullscreen-play.go-live`, and `.room-sync-indicator`.
+- **Mobile Flutter**:
+  - In [listening_room_controller.dart](file:///d:/Learn/InnerTube/music-app/mobile/lib/core/social/listening_room_controller.dart):
+    - Added `bool _isLive` and `Map<String, dynamic>? _latestHostSnapshot`.
+    - Added `pauseListener()` which sets `_isLive = false` and pauses local audio.
+    - In `_receivePlayback(...)`, while `!_isLive`, incoming snapshots update `_latestHostSnapshot` without unpausing or seeking the local player.
+    - Added `goLive()` which marks `_isLive = true` and applies `_latestHostSnapshot` with elapsed-time offset to immediately catch up.
+  - In [player_provider.dart](file:///d:/Learn/InnerTube/music-app/mobile/lib/core/audio/player_provider.dart):
+    - Added dedicated `pause()` and `resume()` helpers.
+  - In [mini_player.dart](file:///d:/Learn/InnerTube/music-app/mobile/lib/core/widgets/mini_player.dart) & [fullscreen_player.dart](file:///d:/Learn/InnerTube/music-app/mobile/lib/features/player/fullscreen_player.dart):
+    - Added `Consumer<ListeningRoomController>` around play/pause controls.
+    - If a listener is desynced (`!room.isLive || !player.isPlaying`), shows a styled red **"LIVE" / "GO LIVE"** button.
+    - Clicking "GO LIVE" resyncs the listener with the host.
+    - When live, pressing Pause pauses only the local device via `room.pauseListener()`.
+
+### Verification
+- Frontend production build (`npm run build`) passed with zero errors.
+- Frontend lint (`npm run lint`) passed with zero errors.
+- Flutter analyzer (`flutter analyze lib`) passed with zero errors and zero warnings.
+- Flutter test suite (`flutter test`) passed **7/7**.
+
+## 05/10/2026 — Listening room unread badge, reload persistence & Join/Create room history
+
+### User report & Requirements
+1. **Unread Message Badge Only**:
+   - In [listening-room-panel.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/listening-room-panel.tsx), line 33 previously displayed room member count (`roomState.members.length`) in a notification badge on the floating room launcher button.
+   - Requirement: Show a number on the button **ONLY** if there is an unread message. If no unread messages or panel is open, do not display any number/badge.
+2. **Page Refresh Persistence**:
+   - When a user refreshes the browser page, they were previously dropped out of the listening room.
+   - Requirement: Fix room persistence across browser reloads/refreshes so members stay in their active room.
+3. **Previous Rooms History in Join & Create Tabs**:
+   - In the **Join room** tab: Show all rooms the user previously joined.
+   - In the **Create room** tab: Show all rooms the user previously created.
+   - Requirement: Both history lists must have a **max-height** with a scrollbar when overflowing.
+
+### Implemented changes
+- **Unread Badge Logic**:
+  - In [listening-room-panel.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/listening-room-panel.tsx):
+    - Removed `roomState.members.length` display from the floating launcher.
+    - Added `unreadCount` tracking state.
+    - Derived `effectiveUnread = open || !roomState.room ? 0 : unreadCount`.
+    - Increments unread count only when new room notifications/messages arrive while the panel is closed (`!openRef.current`).
+    - Resets unread count to 0 when opening the room panel or clicking incoming notifications.
+    - Only renders badge `<span>` when `effectiveUnread > 0`.
+- **Page Refresh Persistence**:
+  - In [listening-room-context.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/context/listening-room-context.tsx):
+    - Whenever a room is created (`createRoom`) or joined (`joinRoom`), persisted active room metadata `{ id, code, name, host_id }` to `localStorage` under `innerwave-active-room:${user.id}`.
+    - Added an automatic reconnection effect on auth initialization that checks `localStorage` and automatically calls `supabase.rpc("join_listening_room", { p_code })` and re-attaches the room.
+    - When user explicitly clicks "Leave", removes `innerwave-active-room:${user.id}` from `localStorage` to prevent unwanted re-attachments.
+- **Previous Rooms History in Join & Create Tabs**:
+  - In [listening-room-context.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/context/listening-room-context.tsx):
+    - Exported `RoomHistoryItem` type and exposed `joinedRoomsHistory` and `createdRoomsHistory`.
+    - Maintained history in `localStorage` under `innerwave-joined-rooms:${user.id}` and `innerwave-created-rooms:${user.id}`.
+    - Automatically synced/merged rooms created by the host from Supabase `listening_rooms` table.
+  - In [listening-room-panel.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/listening-room-panel.tsx):
+    - In "Join room" mode: renders `joinedRoomsHistory` with room name, code, and 1-click "Join" button.
+    - In "Create room" mode: renders `createdRoomsHistory` with room name, code, and 1-click "Reopen" button.
+  - In [globals.css](file:///d:/Learn/InnerTube/music-app/frontend/src/app/globals.css):
+    - Added styling for `.room-history-section`, `.room-history-title`, `.room-history-box`, `.room-history-item`, and `.room-history-btn`.
+    - Applied `max-height: 170px; overflow-y: auto;` to `.room-history-box` with sleek custom scrollbar styling (`scrollbar-width: thin`).
+
+### Verification
+- Frontend production build (`npm run build`) passed with zero errors.
+- Frontend lint (`npm run lint`) passed with zero errors.
+
+## 05/10/2026 — Direct Collaborative Play & Shared Room Queue / Voting Mode (Jukebox System)
+
+### User report & Requirements
+1. **Direct Collaborative Play**:
+   - When any listener in the room plays a song (from search, home shelves, or chat), the song must instantly change for everyone in the room.
+2. **Shared Queue & Song Voting (Jukebox Mode)**:
+   - Provide a shared room queue where any member can queue songs.
+   - All members can upvote / vote for queued songs in real time.
+   - The queue sorts dynamically by votes, and the top-voted song automatically plays next when current playback ends or when next is skipped.
+
+### Implemented changes
+- **Direct Collaborative Playback**:
+  - In [listening-room-context.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/context/listening-room-context.tsx):
+    - Implemented `player.setCommandInterceptor` hook:
+      - When an active listener (`isInRoom && !isHost && isLive`) clicks to play any song or skip next/previous anywhere in the app, the command is intercepted.
+      - Dispatches `{ event: "change_song", payload: { song, context, requesterName, requesterId } }` or `{ event: "skip_song" }` across the Supabase Realtime channel.
+      - Host receives the broadcast and executes `player.play(song, context)` or `player.next()`.
+      - Host's 500 ms playback broadcast automatically synchronizes the new track and time to all room listeners in real time.
+      - Displays toast notification alerting members who changed the song.
+- **Shared Room Queue & Upvoting**:
+  - In [listening-room-context.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/context/listening-room-context.tsx):
+    - Exported `QueuedRoomSong` type and added `roomQueue`, `addToRoomQueue`, `voteSong`, `playQueuedSong`, and `removeFromRoomQueue`.
+    - Handled realtime broadcasts: `"add_to_queue"`, `"vote_queue"`, `"play_queued"`, `"remove_from_queue"`, and `"room_queue_sync"`.
+    - Preserved `roomQueue` in `listening_rooms.playback_state` in Supabase, keeping queues intact across reloads.
+    - Integrated with player: When the host or a collaborator triggers `next` (or track finishes), if the shared queue has songs, the top-voted song (`roomQueue[0]`) plays next automatically and the queue updates.
+- **Drawer UI & Navigation**:
+  - In [listening-room-panel.tsx](file:///d:/Learn/InnerTube/music-app/frontend/src/components/listening-room-panel.tsx):
+    - Added segmented navigation tabs: **Chat** vs **Queue & Vote** (with live queue count badge).
+    - In Chat tab: added a **"+ Queue"** button on song cards to queue suggested songs directly.
+    - In Queue tab:
+      - Displayed "NOW PLAYING IN ROOM" card with live indicator.
+      - Built debounced track search input to quickly find and add any song directly into the room queue.
+      - Rendered dynamically ranked queue cards (`★ TOP`, `#2`, `#3`, etc.).
+      - Added interactive Upvote toggle button (`ThumbsUp` with vote count) with real-time feedback.
+      - Added 1-click "Play Now" and remove actions.
+  - In [globals.css](file:///d:/Learn/InnerTube/music-app/frontend/src/app/globals.css):
+    - Added sleek styles for `.room-nav-tabs`, `.room-queue-tab`, `.room-queue-now`, `.room-queue-card`, `.room-vote-btn`, and search results.
+
+### Verification
+- Frontend production build (`npm run build`) passed with zero errors.
+- Frontend lint (`npm run lint`) passed with zero errors.
+
+

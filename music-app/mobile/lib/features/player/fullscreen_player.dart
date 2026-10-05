@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:palette_generator/palette_generator.dart';
 import '../../core/audio/player_provider.dart';
+import '../../core/social/listening_room_controller.dart';
 import '../../core/models/media_model.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/media_art.dart';
@@ -569,29 +570,84 @@ class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> with Si
                     icon: const Icon(Icons.skip_previous_rounded, color: Colors.white, size: 36),
                     onPressed: player.previous,
                   ),
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(
-                      color: AppTheme.accent,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppTheme.accent.withValues(alpha: 0.45),
-                          blurRadius: 22,
-                          spreadRadius: 2,
+                  Consumer<ListeningRoomController>(
+                    builder: (context, room, _) {
+                      final isListener = room.isInRoom && !room.isHost;
+                      final showGoLive = isListener && (!room.isLive || !player.isPlaying);
+
+                      if (showGoLive) {
+                        return GestureDetector(
+                          onTap: room.goLive,
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 300),
+                            height: 56,
+                            padding: const EdgeInsets.symmetric(horizontal: 22),
+                            decoration: BoxDecoration(
+                              color: Colors.redAccent,
+                              borderRadius: BorderRadius.circular(28),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.redAccent.withValues(alpha: 0.5),
+                                  blurRadius: 22,
+                                  spreadRadius: 2,
+                                ),
+                              ],
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.circle, color: Colors.white, size: 10),
+                                SizedBox(width: 8),
+                                Text(
+                                  'GO LIVE',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                    letterSpacing: 1.1,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+
+                      return AnimatedContainer(
+                        duration: const Duration(milliseconds: 300),
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: AppTheme.accent,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppTheme.accent.withValues(alpha: 0.45),
+                              blurRadius: 22,
+                              spreadRadius: 2,
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    child: IconButton(
-                      icon: Icon(
-                        player.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                        color: Colors.black,
-                        size: 34,
-                      ),
-                      onPressed: player.togglePlayPause,
-                    ),
+                        child: IconButton(
+                          icon: Icon(
+                            player.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                            color: Colors.black,
+                            size: 34,
+                          ),
+                          onPressed: () {
+                            if (isListener) {
+                              if (room.isLive && player.isPlaying) {
+                                room.pauseListener();
+                              } else {
+                                room.goLive();
+                              }
+                            } else {
+                              player.togglePlayPause();
+                            }
+                          },
+                        ),
+                      );
+                    },
                   ),
                   IconButton(
                     icon: const Icon(Icons.skip_next_rounded, color: Colors.white, size: 36),
