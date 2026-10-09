@@ -28,3 +28,6 @@ flutter run
 ```
 
 The mobile backend URL is configured in `music-app/mobile/lib/core/api/music_api.dart`. Use a current HTTPS deployment URL for physical-device testing.
+
+
+this project is Test Purpose only
